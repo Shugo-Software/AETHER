@@ -21,6 +21,7 @@ PHASES = [
     ('8', 'Model export (merge -> GGUF -> HF)', 'done', 'export.md'),
     ('9', 'DPO / preference optimization', 'todo', None),
     ('10', 'Jadis 1.0 release (turn-shape fix + multi-quant export)', 'done', 'export.md'),
+    ('11', 'External datasets + recursive loop (pull to G: -> train -> gate -> release)', 'active', 'dataset-generation.md'),
 ]
 
 LOGS_TO_KEEP = 3
@@ -214,6 +215,151 @@ def export_state():
     return out
 
 
+def corpus_state():
+    """What the model actually learns: label masking + corpus health.
+
+    Every number comes from a file a pipeline stage wrote (the trainer's state,
+    verify_dataset's report, fit_corpus's provenance), so the panel shows
+    measurements rather than intentions — and `warnings` names the failure modes
+    (unmasked loss, answers truncated away, anchor leakage) instead of hiding
+    them behind a green tick.
+    """
+    out = {'train': None, 'verify': None, 'fit': None, 'warnings': [], 'notes': []}
+    states = [s for s in sorted(glob.glob(os.path.join(ROOT, 'logs', 'train-*.json')),
+                                key=os.path.getmtime)
+              if not s.endswith('train-active.json')]
+    if states:
+        try:
+            with open(states[-1], encoding='utf-8') as fh:
+                st = json.load(fh)
+            cfg = st.get('config') or {}
+            out['train'] = {
+                'file': os.path.basename(states[-1]), 'tag': st.get('tag'),
+                'status': st.get('status'), 'loss': st.get('train_loss'),
+                'dataset': cfg.get('dataset'), 'max_len': cfg.get('max_len'),
+                'max_steps': cfg.get('max_steps'), 'lr': cfg.get('lr'),
+                'prompt_loss': cfg.get('prompt_loss'),
+                'rows': st.get('rows'), 'rows_used': cfg.get('rows_used'),
+                'dropped_no_answer': cfg.get('dropped_no_answer'),
+                'answer_token_share': cfg.get('answer_token_share')}
+        except (OSError, ValueError):
+            pass
+    reports = sorted(glob.glob(os.path.join(ROOT, 'logs', 'verify-dataset-*.json')),
+                     key=os.path.getmtime)
+    if reports:
+        try:
+            with open(reports[-1], encoding='utf-8') as fh:
+                rep = json.load(fh)
+            t = rep.get('tokens') or {}
+            cnt = rep.get('counts') or (t.get('tokens') or {})
+            dup = rep.get('duplicates') or {}
+            over = rep.get('overlap') or {}
+            out['verify'] = {
+                'file': os.path.basename(reports[-1]), 'corpus': rep.get('file'),
+                'rows': t.get('rows'), 'max_len': t.get('max_len'),
+                'classes': t.get('classes'),
+                'answer_cut': (t.get('classes') or {}).get('answer_cut'),
+                'terminator_pct': t.get('terminator_pct'),
+                'answer_tokens_kept_pct': cnt.get('completion_kept_pct'),
+                'answer_token_share': cnt.get('answer_loss_share'),
+                'duplicate_groups': dup.get('duplicate_groups'),
+                'duplicate_rows': dup.get('rows_in_duplicate_groups'),
+                'anchor_overlap': over.get('shared'),
+                'len_tokens': t.get('len_tokens')}
+        except (OSError, ValueError):
+            pass
+    fits = sorted(glob.glob(os.path.join(ROOT, 'datasets', '*.filter.json')),
+                  key=os.path.getmtime)
+    if fits:
+        try:
+            with open(fits[-1], encoding='utf-8') as fh:
+                f = json.load(fh)
+            out['fit'] = {'file': os.path.basename(fits[-1]),
+                          'rows_in': (f.get('input') or {}).get('rows'),
+                          'rows_out': (f.get('output') or {}).get('rows'),
+                          'trimmed_rows': f.get('trimmed_rows'),
+                          'dropped': f.get('dropped'),
+                          'policy': f.get('policy')}
+        except (OSError, ValueError):
+            pass
+    out['warnings'], out['notes'] = _corpus_findings(out)
+    return out
+
+
+def _corpus_findings(out):
+    """Warnings/notes derived from the three stage reports."""
+    warns, notes = [], []
+    tr = out.get('train') or {}
+    ve = out.get('verify') or {}
+    fi = out.get('fit') or {}
+    if tr:
+        if tr.get('prompt_loss') == 'full':
+            warns.append('prompt_loss=full — the loss covers the prompt too, so '
+                         'most of the gradient is reproducing the input rather '
+                         'than answering')
+        elif tr.get('prompt_loss') == 'masked':
+            share = tr.get('answer_token_share')
+            notes.append('prompt_loss=masked — only answer tokens carry gradient%s'
+                         % (' (answers are %d%% of the tokens kept)'
+                            % round(100 * share)
+                            if isinstance(share, (int, float)) else ''))
+        if (tr.get('dropped_no_answer') or 0) > 0:
+            warns.append('%d rows had no answer tokens left at max_len=%s and were '
+                         'dropped during training — fit the corpus first'
+                         % (tr['dropped_no_answer'], tr.get('max_len')))
+        if tr.get('rows_used') and tr.get('rows') and tr['rows_used'] < tr['rows']:
+            notes.append('%d of %d corpus rows were used'
+                         % (tr['rows_used'], tr['rows']))
+    if ve:
+        if (ve.get('answer_cut') or 0) > 0:
+            warns.append('%d rows lose their answer entirely at max_len=%s — with '
+                         'masked loss they teach nothing, and unmasked they teach '
+                         'the prompt' % (ve['answer_cut'], ve.get('max_len')))
+        if ve.get('anchor_overlap'):
+            warns.append('%s prompts also appear in the anchor set — comparisons '
+                         'against it are contaminated' % ve['anchor_overlap'])
+        if ve.get('duplicate_groups'):
+            notes.append('%d duplicate prompt groups cover %s rows'
+                         % (ve['duplicate_groups'], ve.get('duplicate_rows')))
+        if fi and fi.get('trimmed_rows'):
+            notes.append('%d answers trimmed to fit the budget'
+                         % fi['trimmed_rows'])
+    else:
+        warns.append('this corpus has never been measured — run verify_dataset.py '
+                     '(--max-len) before trusting a training run on it')
+    return warns, notes
+
+
+def hf_state():
+    """Linked Hugging Face datasets: state, disk cost, queue and job feed."""
+    try:
+        import hf_datasets as hf
+    except Exception as e:  # noqa: BLE001 — the panel must not break the page
+        return {'error': str(e), 'datasets': [], 'jobs': [], 'storage': {}}
+    data = hf.load_registry()
+    items = []
+    for e in data['datasets']:
+        items.append({
+            'id': e['id'], 'state': e.get('state'), 'tag': e.get('tag'),
+            'rows': e.get('rows'), 'fitted_rows': e.get('fitted_rows'),
+            'bytes_human': hf.human(e.get('bytes') or 0),
+            'freed_human': (hf.human(e.get('freed_bytes'))
+                            if e.get('freed_bytes') else None),
+            'corpus': e.get('corpus'), 'fitted': e.get('fitted'),
+            'health': e.get('health'), 'audit': e.get('audit'),
+            'dropped': e.get('dropped'), 'note': e.get('note'),
+            'license': e.get('license'), 'likes': e.get('likes'),
+            'downloads': e.get('downloads'), 'split': e.get('pulled_split'),
+            'on_disk': os.path.isdir(e.get('local_dir') or ''),
+            'gate': e.get('gate'), 'revision': (e.get('revision') or '')[:8]})
+    st = hf.storage()
+    return {'datasets': items, 'queue': hf.queue_summary(data),
+            'jobs': hf.jobs()[:12],
+            'storage': {'root': st['root'], 'total_human': st['total_human'],
+                        'free_human': st['free_human'],
+                        'orphans': st['orphans']}}
+
+
 def snapshot():
     return {'updated_utc': datetime.now(timezone.utc).isoformat(timespec='seconds'),
             'phases': [{'n': n, 'name': name, 'status': s, 'doc': d} for n, name, s, d in PHASES],
@@ -221,5 +367,7 @@ def snapshot():
             'teacher': teacher_state(),
             'datasets': dataset_inventory(),
             'training': training_status(),
+            'corpus': corpus_state(),
+            'hfd': hf_state(),
             'export': export_state(),
             'control': control_state()}

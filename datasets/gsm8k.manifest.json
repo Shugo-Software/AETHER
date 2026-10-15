@@ -1,0 +1,42 @@
+{
+  "tag": "gsm8k",
+  "created_utc": "2026-10-15T19:07:52+00:00",
+  "purpose": "training",
+  "params": {
+    "source": null,
+    "repo": "openai/gsm8k",
+    "map_": "flat",
+    "turn_mode": "last",
+    "from_local": "G:\\Program Prototype\\AETHER\\cache\\datasets\\openai--gsm8k",
+    "from_local_files": "main\\train-00000-of-00001.parquet",
+    "local_pattern": null,
+    "eval_only": false,
+    "tag": "gsm8k",
+    "split": "train",
+    "limit": 2000,
+    "scan_limit": 20000,
+    "max_prompt_chars": 4000,
+    "max_completion_chars": 4000,
+    "max_fences": 3,
+    "max_reasoning_chars": 2000
+  },
+  "source": {
+    "repo": "openai/gsm8k",
+    "split": "train",
+    "revision": "740312add88f781978c0658806c59bc2815b9866"
+  },
+  "counts": {
+    "scanned": 2001,
+    "written": 2000,
+    "dropped": {}
+  },
+  "completion_chars": {
+    "min": 50,
+    "median": 256,
+    "max": 1199
+  },
+  "output": {
+    "jsonl": "datasets\\gsm8k.jsonl",
+    "sha256": "ffa9deb786533f3dfc0e7882fc7f5424612e82316f30b0932c1d79f87619eb4b"
+  }
+}

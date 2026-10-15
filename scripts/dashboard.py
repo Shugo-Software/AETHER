@@ -39,6 +39,12 @@ padding:10px;overflow:auto;font-size:12px;max-height:300px;white-space:pre-wrap}
 .card{background:#181c22;border:1px solid #2a2f38;border-radius:8px;
 padding:12px 14px;margin:8px 0}
 .ok{color:#58c184}.bad{color:#e5625e}
+.warn{color:#f0b429;font-size:13px;padding:2px 0}
+.pill{display:inline-block;padding:1px 8px;border-radius:10px;font-size:11px;
+background:#2a2f38;color:#b9c6dd;margin-right:4px}
+.pill.ok{background:#1e3a2b;color:#7ad39b}.pill.bad{background:#3a1e1e;color:#f09a97}
+.pill.warn{background:#3a3320;color:#f0c674}
+.pill.run{background:#1e2d3a;color:#7fb6e3}
 .stats{display:flex;flex-wrap:wrap;gap:10px;margin:10px 0}
 .stat{background:#181c22;border:1px solid #2a2f38;border-radius:8px;
 padding:10px 16px;min-width:140px}
@@ -48,6 +54,9 @@ padding:10px 16px;min-width:140px}
 .ranges button{background:#2a2f38;color:#e6e9ee;border:1px solid #2a2f38;
 border-radius:6px;padding:3px 12px;cursor:pointer;font-size:12px}
 .ranges button.on{background:#4aa3ff;color:#0b0d10;border-color:#4aa3ff}
+.hfrow{cursor:pointer;background:#2a2f38;color:#e6e9ee;border:1px solid #3a4150;
+border-radius:5px;padding:2px 8px;font-size:11px;margin-right:3px}
+.hfrow:hover{background:#3a4150}
 .chartbox{background:#0b0d10;border:1px solid #2a2f38;border-radius:8px;padding:6px}
 .chartbox svg{width:100%;height:auto;display:block}
 .gen{display:flex;gap:12px;flex-wrap:wrap}
@@ -129,6 +138,192 @@ def _training_header(snap):
     return h
 
 
+def _corpus_panel(snap):
+    """'What the model is learning' — masking + corpus health, from measurements."""
+    c = snap.get('corpus') or {}
+    tr = c.get('train') or {}
+    ve = c.get('verify') or {}
+    fi = c.get('fit') or {}
+    h = ['<h2>What the model is learning</h2>', '<div class="card">']
+    h.append('<div id="corpus-findings">')
+    for w in c.get('warnings') or []:
+        h.append('<div class="warn">&#9888; %s</div>' % html.escape(str(w)))
+    for n in c.get('notes') or []:
+        h.append('<div class="small">&#8226; %s</div>' % html.escape(str(n)))
+    if not (c.get('warnings') or c.get('notes')):
+        h.append('<div class="small">no corpus has been measured yet</div>')
+    h.append('</div>')
+
+    if tr:
+        h.append('<h3>Training run (labels actually trained on)</h3><table>')
+        for key, label in (('file', 'state file'), ('tag', 'tag'),
+                           ('dataset', 'corpus'), ('prompt_loss', 'loss on'),
+                           ('rows', 'corpus rows'), ('rows_used', 'rows trained'),
+                           ('dropped_no_answer', 'rows dropped, no answer'),
+                           ('answer_token_share', 'answer share of tokens'),
+                           ('max_len', 'max_len'), ('max_steps', 'max_steps'),
+                           ('lr', 'lr'), ('loss', 'final loss'),
+                           ('status', 'status')):
+            v = tr.get(key)
+            if v is None:
+                continue
+            if key == 'prompt_loss':
+                v = ('answers only (masked)' if v == 'masked'
+                     else 'prompt + answer (diluted)')
+            if key == 'answer_token_share' and isinstance(v, (int, float)):
+                v = '%.1f%%' % (100 * v)
+            h.append('<tr><td>%s</td><td><b>%s</b></td></tr>'
+                     % (html.escape(label), html.escape(str(v))))
+        h.append('</table>')
+    else:
+        h.append('<div class="small">(no training run recorded yet)</div>')
+
+    if ve:
+        cls = ve.get('classes') or {}
+        h.append('<h3>Corpus health at max_len=%s <span class="small">(%s)</span></h3>'
+                 % (html.escape(str(ve.get('max_len'))),
+                    html.escape(str(ve.get('file')))))
+        h.append('<div class="stats">')
+        for label, val, cls_ in (
+                ('rows', ve.get('rows'), ''),
+                ('complete', cls.get('complete'), 'ok'),
+                ('partial', cls.get('partial'), 'warn'),
+                ('answer cut away', cls.get('answer_cut'), 'bad'),
+                ('answers kept', (('%s%%' % ve.get('answer_tokens_kept_pct'))
+                                  if ve.get('answer_tokens_kept_pct') is not None
+                                  else None), ''),
+                ('terminator survives', (('%s%%' % ve.get('terminator_pct'))
+                                         if ve.get('terminator_pct') is not None
+                                         else None), 'ok'),
+                ('duplicate groups', ve.get('duplicate_groups'), ''),
+                ('anchor overlap', ve.get('anchor_overlap'),
+                 'bad' if ve.get('anchor_overlap') else 'ok')):
+            if val is None:
+                continue
+            h.append('<div class="stat"><div class="k">%s</div>'
+                     '<div class="v %s">%s</div></div>'
+                     % (html.escape(label), cls_, html.escape(str(val))))
+        h.append('</div>')
+        lt = ve.get('len_tokens') or {}
+        h.append('<div class="small">corpus %s</div>'
+                 % html.escape(str(ve.get('corpus'))))
+        if lt:
+            h.append('<div class="small">row tokens: median %s, p90 %s, max %s</div>'
+                     % (lt.get('median'), lt.get('p90'), lt.get('max')))
+    if fi:
+        h.append('<h3>Fit to budget <span class="small">(%s)</span></h3>'
+                 % html.escape(str(fi.get('file'))))
+        h.append('<div class="small">%s rows &rarr; %s kept, %s trimmed; dropped: %s</div>'
+                 % (fi.get('rows_in'), fi.get('rows_out'), fi.get('trimmed_rows'),
+                    html.escape(json.dumps(fi.get('dropped') or {}))))
+    h.append('</div>')
+    return h
+
+
+def _hf_panel(snap):
+    """Link / pull / prepare / train / release, with disk and queue state."""
+    d = snap.get('hfd') or {}
+    st = d.get('storage') or {}
+    q = d.get('queue') or {}
+    h = ['<h2>Hugging Face datasets &mdash; pull to G:, train, verify, release</h2>']
+    h.append('<div class="card"><div class="ctl">')
+    h.append('<label>dataset url or id<input id="hf-repo" size="44" '
+             'placeholder="https://huggingface.co/datasets/org/name"></label>')
+    h.append('<label>split<select id="hf-split">'
+             '<option value="full">full</option><option value="train">train</option>'
+             '<option value="all">all files</option></select></label>')
+    h.append('<label>map<select id="hf-map">'
+             '<option value="chat">chat (messages)</option>'
+             '<option value="flat">flat (prompt/answer)</option></select></label>')
+    h.append('<label>rows to keep<input id="hf-limit" type="number" value="2000"></label>')
+    h.append('<label>max-len<input id="hf-maxlen" type="number" value="1536"></label>')
+    h.append('<button class="act start" id="hf-add">Link</button>')
+    h.append('<button class="act start" id="hf-advance">Pull + prepare</button>')
+    h.append('<button class="act start" id="hf-train">Train</button>')
+    h.append('<button class="act" id="hf-queue">Run queue</button>')
+    h.append('</div>')
+    h.append('<div id="hf-status">pull &rarr; convert &rarr; verify &rarr; fit, then '
+             'train. A dataset is deleted only after an iteration passes the gate '
+             'on it.</div>')
+    h.append('</div>')
+    h.append('<div class="small">dataset drive <b>%s</b>: %s held, %s free'
+             % (html.escape(str(st.get('root'))),
+                html.escape(str(st.get('total_human'))),
+                html.escape(str(st.get('free_human')))))
+    if q:
+        nxt = (', next ' + html.escape(str(q.get('next')))) if q.get('next') else ''
+        h.append(' &middot; queue: %s pending%s' % (q.get('pending'), nxt))
+    h.append('</div>')
+
+    sets = d.get('datasets') or []
+    if sets:
+        h.append('<table><tr><th>Dataset</th><th>State</th><th>Rows</th>'
+                 '<th>On disk</th><th>Corpus</th><th>Why / audit</th><th></th></tr>')
+        for e in sets:
+            state = str(e.get('state'))
+            tone = ('ok' if state in ('learned_verified', 'dropped')
+                    else 'bad' if state in ('error', 'not_trainable')
+                    else 'run' if state == 'training' else 'warn')
+            pills = ['<span class="pill %s">%s</span>' % (tone, html.escape(state))]
+            if e.get('on_disk'):
+                pills.append('<span class="pill">on G:</span>')
+            if e.get('gate'):
+                pills.append('<span class="pill ok">gate %s</span>'
+                             % html.escape(str(e['gate'].get('mean_pass'))))
+            why = e.get('note') or ''
+            if e.get('audit'):
+                a = e['audit']
+                why = ('%s &middot; scanned %s rows &middot; %s tool-call turns '
+                       '&middot; %s marker drops &middot; %s records &middot; %s'
+                       % (a.get('shape', ''), a.get('rows_scanned'),
+                          a.get('assistant_tool_call_turns'),
+                          a.get('agentic_marker_drops'), a.get('records_matched'),
+                          a.get('verdict', '')))
+            elif e.get('health'):
+                hh = e['health']
+                why = ('%s rows &middot; answer-cut %s &middot; terminator %s%% '
+                       '&middot; answer share %s'
+                       % (hh.get('rows'), hh.get('answer_cut'),
+                          hh.get('terminator_pct'), hh.get('answer_token_share')))
+            elif e.get('dropped'):
+                why = 'dropped: %s' % json.dumps(e['dropped'])
+            h.append('<tr><td class="small">%s<div class="small">%s</div></td>'
+                     '<td>%s</td><td>%s</td><td>%s</td><td class="small">%s</td>'
+                     '<td class="small">%s</td><td>'
+                     % (html.escape(e['id']), html.escape(e.get('revision') or ''),
+                        ' '.join(pills), e.get('rows') or '-',
+                        html.escape(str(e.get('bytes_human') if e.get('on_disk')
+                                        else (e.get('freed_human') or '-'))),
+                        html.escape(str(e.get('fitted') or e.get('corpus') or '-')),
+                        html.escape(why)))
+            for act, label in (('verify', 'verify'), ('fit', 'fit'),
+                               ('train', 'train'), ('learned_verified', 'gate'),
+                               ('drop', 'delete')):
+                h.append('<button class="hfrow" data-act="%s" data-repo="%s">%s</button>'
+                         % (act, html.escape(e['id']), label))
+            h.append('</td></tr>')
+        h.append('</table>')
+    else:
+        h.append('<div class="card">no datasets linked yet &mdash; paste a '
+                 'huggingface.co/datasets URL above</div>')
+
+    jobs = d.get('jobs') or []
+    if jobs:
+        h.append('<h3>Pipeline jobs</h3><table><tr><th>Job</th><th>Dataset</th>'
+                 '<th>State</th><th>Last log line</th></tr>')
+        for j in jobs:
+            tail = (j.get('tail') or '').splitlines()
+            h.append('<tr><td class="small">%s</td><td class="small">%s</td>'
+                     '<td>%s</td><td class="small"><code>%s</code></td></tr>'
+                     % (html.escape(j.get('action', '')),
+                        html.escape(str(j.get('repo') or '')),
+                        '<span class="pill run">running</span>' if j.get('running')
+                        else '<span class="pill">done</span>',
+                        html.escape(tail[-1] if tail else '')))
+        h.append('</table>')
+    return h
+
+
 def render(snap):
     t = snap["training"]
     tr = t.get("detail", {}) if isinstance(t.get("detail"), dict) else {}
@@ -174,6 +369,12 @@ def render(snap):
     h.append("</div>")
     h.append('<div id="ctl-status">idle — pick a dataset and press Start</div>')
     h.append("</div>")
+
+    # What the model is learning (label masking + corpus health)
+    h.extend(_corpus_panel(snap))
+
+    # Hugging Face datasets (link / pull to G: / prepare / train / release)
+    h.extend(_hf_panel(snap))
 
     # Export / push (merge LoRA -> standalone model -> optional GGUF/HF)
     h.append("<h2>Export / push</h2>")
@@ -411,6 +612,7 @@ function apply(s){
   updateGpus(s.gpus);
   if(s.training&&s.training.samples){window.__samples=s.training.samples;buildGens(s.training.samples);}
   if(s.control)applyControl(s.control);
+  if(s.corpus)applyCorpus(s.corpus);
   if(s.export)updateExport(s.export);
 }
 function applyControl(c){
@@ -488,6 +690,34 @@ function updateExport(x){
   if(lg){if(x.log_tail&&x.log_tail.length){lg.style.display='block';
     lg.textContent=x.log_tail.join('\n');}else{lg.style.display='none';}}
 }
+function hfRun(action,repo){
+  var el=document.getElementById('hf-status');
+  var box=document.getElementById('hf-repo');
+  var repo_=repo||(box?box.value.trim():'');
+  if(action!=='queue_run'&&!repo_){if(el)el.innerHTML='<span class="bad">give a dataset url or id first</span>';return;}
+  var body={action:action,repo:repo_};
+  var s=document.getElementById('hf-split'); if(s)body.split=s.value;
+  var m=document.getElementById('hf-map'); if(m)body.map=m.value;
+  var l=document.getElementById('hf-limit'); if(l)body.limit=parseInt(l.value);
+  var ml=document.getElementById('hf-maxlen'); if(ml)body.max_len=parseInt(ml.value);
+  if(action==='drop'&&!window.confirm('Delete the local copy of '+repo_+' from the G: drive?'))return;
+  if(el)el.innerHTML='<span class="ok">'+action+' starting…</span>';
+  fetch('/api/hf/run',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify(body)}).then(function(r){return r.json();}).then(function(o){
+    if(o.ok){if(el)el.innerHTML='<span class="ok">'+action+' started (pid '+o.job.pid+
+      ') — watch Pipeline jobs below</span>';}
+    else{if(el)el.innerHTML='<span class="bad">'+action+' failed: '+(o.error||'?')+'</span>';}
+    poll();
+  }).catch(function(e){if(el)el.innerHTML='<span class="bad">request failed: '+e+'</span>';});
+}
+function applyCorpus(c){
+  if(!c)return; var box=document.getElementById('corpus-findings'); if(!box)return;
+  var out='';
+  (c.warnings||[]).forEach(function(w){out+='<div class="warn">&#9888; '+esc(w)+'</div>';});
+  (c.notes||[]).forEach(function(n){out+='<div class="small">&#8226; '+esc(n)+'</div>';});
+  if(!out)out='<div class="small">no corpus findings</div>';
+  box.innerHTML=out;
+}
 function poll(){
   fetch('/api/snapshot').then(function(r){return r.json();}).then(apply).catch(function(){});
 }
@@ -504,6 +734,13 @@ document.addEventListener('DOMContentLoaded',function(){
   var tb=document.getElementById('ctl-stop'); if(tb)tb.addEventListener('click',stopTrain);
   var eb=document.getElementById('exp-start'); if(eb)eb.addEventListener('click',startExport);
   var xs=document.getElementById('exp-stop'); if(xs)xs.addEventListener('click',stopExport);
+  // Hugging Face dataset pipeline: form buttons + one delegated handler for rows
+  var hb=document.getElementById('hf-add'); if(hb)hb.addEventListener('click',function(){hfRun('add');});
+  var ha=document.getElementById('hf-advance'); if(ha)ha.addEventListener('click',function(){hfRun('advance');});
+  var ht=document.getElementById('hf-train'); if(ht)ht.addEventListener('click',function(){hfRun('train');});
+  var hq=document.getElementById('hf-queue'); if(hq)hq.addEventListener('click',function(){hfRun('queue_run');});
+  document.addEventListener('click',function(e){var b=e.target;
+    if(b&&b.classList&&b.classList.contains('hfrow')){hfRun(b.dataset.act,b.dataset.repo);}});
   poll(); setInterval(poll,5000);
 });
 </script>
@@ -569,6 +806,36 @@ class Handler(BaseHTTPRequestHandler):
             with _CTL_LOCK:
                 ok, payload = ec.stop_export()
             self._json(200 if ok else 409, dict(payload, ok=ok))
+        elif self.path == "/api/hf/run":
+            # Dataset pipeline (pull to G:, convert, verify, fit, train, drop).
+            # Every action runs the same script the CLI runs, detached, so a
+            # multi-GB pull can never block this handler.
+            import hf_datasets as hf
+            length = int(self.headers.get("Content-Length", 0) or 0)
+            raw = self.rfile.read(length) if length else b"{}"
+            try:
+                cfg = json.loads(raw or b"{}")
+            except ValueError:
+                self._json(400, {"ok": False, "error": "invalid JSON body"})
+                return
+            action = str(cfg.get("action") or "")
+            if action not in hf.JOBS:
+                self._json(400, {"ok": False,
+                                 "error": "unknown action %r" % action})
+                return
+            with _CTL_LOCK:
+                try:
+                    job = hf.spawn(action, cfg.get("repo"),
+                                   split=cfg.get("split"), tag=cfg.get("tag"),
+                                   map_=cfg.get("map"), limit=cfg.get("limit"),
+                                   max_len=cfg.get("max_len"),
+                                   max_steps=cfg.get("max_steps"),
+                                   sample=cfg.get("sample"),
+                                   min_pass=cfg.get("min_pass"))
+                except Exception as e:  # noqa: BLE001 — surface, never 500
+                    self._json(409, {"ok": False, "error": str(e)})
+                    return
+            self._json(200, {"ok": True, "job": job})
         else:
             self._json(404, {"ok": False, "error": "unknown endpoint"})
 

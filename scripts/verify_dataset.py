@@ -310,6 +310,7 @@ def main():
         with open(out, "w", encoding="utf-8") as fh:
             json.dump({"file": os.path.relpath(jsonl, ROOT),
                        "composition": comp, "tokens": summ,
+                       "counts": summ.get("tokens") or {},
                        "duplicates": dup, "overlap": overlap,
                        "truncated_rows": [d for d in det
                                           if d["cls"] != "complete"]},

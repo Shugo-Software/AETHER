@@ -118,6 +118,45 @@ Export details (merge → GGUF → Hugging Face): see `docs/export.md`.
 | `scripts/dashboard.py` | HTML render + `HTTPServer` on 127.0.0.1 (`/` and `/api/snapshot`) |
 | `scripts/start-dashboard.ps1` | launcher (port guard, log files) |
 
+## What the model is learning (panel, 2026-10-15)
+
+Everything in this panel is read back from what a pipeline stage actually wrote,
+never from intent — `logs/train-<tag>.json` (the trainer), `logs/verify-dataset-*.json`
+(`verify_dataset.py`) and `datasets/*.filter.json` (`fit_corpus.py`). It shows:
+
+- **label masking** — `prompt_loss` (`masked` = only answer tokens carry gradient,
+  `full` = the loss covers the prompt too), `rows_used` / `rows`,
+  `dropped_no_answer` (rows left with no answer at `max_len`), and the **answer
+  share of loss tokens**;
+- **corpus health** — rows, complete / partial / **answer cut away**, answers kept %,
+  terminator survives %, duplicate groups, anchor overlap, row-token percentiles;
+- **fit provenance** — rows in/out, how many answers were trimmed, why rows were
+  dropped;
+- **warnings** in amber, e.g. `prompt_loss=full` (gradient diluted), rows that lose
+  their answer entirely, anchor prompts inside the corpus, or a corpus that has
+  never been measured. These are the failure modes that are otherwise invisible
+  until the model misbehaves, so they are stated in words rather than implied by a
+  chart.
+
+## Hugging Face datasets (panel, 2026-10-15)
+
+Link a dataset by pasting **any** huggingface.co URL (or `org/name`), then drive
+the pipeline from the dashboard: **Link → Pull + prepare → Train → Run queue**, plus
+per-row `verify` / `fit` / `train` / `gate` / `delete`. The panel shows each
+dataset's state, rows, bytes held on G:, the corpus or fitted file, why a dataset
+was rejected (with its audit numbers), the queue (`pending`, `next`), the dataset
+drive's held/free space, and a **Pipeline jobs** table with each job's last log
+line. Long jobs (a multi-GB pull, a training iteration) run detached, so the page
+never blocks. Deletion is refused until an iteration has passed the gate on that
+dataset — the UI asks for confirmation and the API enforces the same rule.
+Implementation: `scripts/hf_datasets.py` (`--selftest` covers URL parsing, the
+registry and the drop gate). See `docs/dataset-generation.md`.
+
+POST `/api/hf/run` with `{"action": "...", "repo": "...", "split": "...",
+"map": "chat|flat", "limit": N, "max_len": N}` drives the panel; actions are the
+`hf_datasets.py` CLI flags (`add`, `pull`, `convert`, `verify`, `fit`, `train`,
+`learned_verified`, `drop`, `advance`, `queue_run`).
+
 ## Notes
 
 - **Trainers must copy their stdout to `logs/train-<tag>.log`** for the log tail to

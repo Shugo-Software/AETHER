@@ -130,7 +130,64 @@ Measured on `phase6_pro1.jsonl` (500 rows, the first corpus built for the loop):
 
 Dropped: `prompt_too_long=67`, `anchor_holdout=101`, `answer_too_short_after_trim=2`.
 
+## The Hugging Face dataset pipeline (link → pull to G: → learn → release)
+
+`scripts/hf_datasets.py` runs one dataset at a time, whole, on disk, then removes
+it. State per dataset lives in `logs/hf-datasets.json`:
+
+```
+added → pulled → converted → verified → fitted → training → learned_verified → dropped
+                                        ↘ not_trainable / error
+```
+
+- **pull** — `snapshot_download` into `cache/datasets/<org>--<name>/` (G:, gitignored).
+  Card file patterns are globs (`main/train-*`) and many datasets ship Parquet, so
+  patterns are expanded and both `.jsonl` and `.parquet` are read. When a card
+  offers several splits of the same data (`5k/` and `10k/`), only the largest is
+  mapped, and when it lists several configs under one split name (`main/` +
+  `socratic/` for gsm8k) the **first** wins — pulling both would silently double
+  the corpus with a different recipe.
+- **convert** — maps the *local* copy (never re-streams the hub) into the training
+  schema. `--map chat` turns each assistant turn of a `messages` transcript into a
+  context → answer pair; `--map flat` auto-detects prompt/answer column pairs
+  (`prompt/completion`, `instruction/response`, `question/answer`, …), and a row's
+  `reasoning`/`thinking` field is rendered into the `<think>` block.
+- **verify / fit** — `verify_dataset.py` and `fit_corpus.py`, mandatory before
+  training (see above).
+- **train** — launches a `recursive_train.py` iteration on the fitted corpus.
+- **learned_verified** — set only when that iteration's **gate passes** (the
+  teacher graded the trained student on held-out rows). This is the licence to
+  delete: `--drop` refuses while the state is anything else, because keeping the
+  local copy is what makes another attempt possible.
+- **drop** — deletes the copy, records how many bytes were freed.
+
+```powershell
+python scripts\hf_datasets.py --add https://huggingface.co/datasets/org/name
+python scripts\hf_datasets.py --advance org/name --split full --map chat --tag myrun
+python scripts\hf_datasets.py --train org/name
+python scripts\hf_datasets.py --learned-verified org/name
+python scripts\hf_datasets.py --drop org/name --yes
+python scripts\hf_datasets.py --queue-run          # one dataset after another
+python scripts\hf_datasets.py --selftest           # URL parsing, registry, drop gate
+```
+
+The same actions are in the dashboard ("Hugging Face datasets" panel: link, pull +
+prepare, train, run queue, per-row verify/fit/train/gate/delete), where a slow
+multi-GB pull runs detached and its log tail shows in "Pipeline jobs".
+
+### Two measured verdicts (2026-10-15)
+
+| Dataset | Result |
+|---|---|
+| **`MoreThought/Fable-5.1-Max-Reasoning-Filtered-10000x`** (2.36 GB pulled, 15,000 rows) | **Not trainable as SFT data.** Rows measure as 1 system + **1 user turn + 65–117 tool exchanges**; there is **no `reasoning_content` field** — the "max reasoning" *is* the tool usage. Single-turn extraction kept **0 of 10,000 rows** (`assistant_tool_calls: 8169`, `agentic_marker: 1811`); harvesting every prose turn found **383,087 tool-call turns**, **71,357 marker drops** and left **25 records** whose completions were ~96 chars — "I'll inspect the repo" bridges, which would teach a student to narrate work it cannot do. Recorded as `not_trainable` with the audit attached. Using it would need a **teacher rewrite** step: read each trace, distil it into a self-contained Q&A lesson. |
+| **`openai/gsm8k`** (4.75 MB pulled, 7,473 rows) | **Clean.** 2,000 rows converted: **100% complete, 0 answer-cut, terminator 100%, answers 53.3% of loss tokens, 0 duplicates, 0 anchor overlap**, median row 185 tokens (fits 1536 with room to spare). Ready to train. |
+
+The contrast is the point: the pipeline does not judge by likes or downloads
+(5.6k vs 39k), it measures what a 2.6B student could actually learn. Fable is
+excellent data for a frontier model that can act; it is not SFT data here.
+
 ### The anchor set is also the seed source — a structural conflict
+
 
 `phase6_pilot1.jsonl` (60 prompts) is the anchor for every comparison, but the
 `seed_gen` recipe draws its seeds from that same list. So 101 rows of `pro1`
