@@ -170,6 +170,8 @@ Canonical list lives in `hardware-inventory.md`. Key ones for this phase:
 | `scripts/export_control.py` | Dashboard export control: `start_export`/`stop_export`/`active_export` (same safe-launch + PID-guarded pattern as training; quant list read from `export_model.QUANT_TYPES`) |
 | `scripts/verify_export.py` | Independent export smoke test: merged model via plain `transformers` (asserts all-`F16` header) + GGUF via `llama-cli` (`-st -ngl 0`) → `logs/verify-<name>.json` |
 | `scripts/eval_jadis.py` | Behaviour eval: base vs base+adapter, two prompt conventions (`template` prefill vs `raw`), auto metrics (`</think>` close/lead, preamble, per-recipe format, memory overlap) → `logs/eval-<tag>.md`/`.json`; `--samples` feeds the dashboard |
+| `scripts/serve_student.ps1` | Student endpoint lifecycle: start/stop one GGUF on one pinned GPU (`-Device CUDA1|CUDA2 -Port 8082/8083 -Alias`), health-waited, PID-guarded stop, logs under `logs/` |
+| `scripts/review_students.py` | Teacher-as-judge review: student answers (temp 0) are graded against the corpus reference with a strict JSON rubric → `logs/review-<tag>.jsonl` + `.md` (pass rate, mean score, per-recipe, worst verdicts); `--eval-math` switches to the eval-only set |
 | `scripts/bench_3gb.py` | 3 GB deployment sweep: llama-cli per (quant × ctx × backend) with peak-VRAM sampling → `docs/benchmarks/three_gb_<stamp>.csv` |
 | `exports/<name>/` | Export output: merged fp16 safetensors + tokenizer + `chat_template.jinja`, `<name>-<quant>.gguf` set, generated `README.md` model card, `LICENSE`, `export-manifest.json` |
 | `adapters/jadis-1.0` | **Release adapter** — fresh QLoRA on `phase6_pilot1.jsonl` (75 rows, 10 epochs) with the corrected `<think>` turn shape |

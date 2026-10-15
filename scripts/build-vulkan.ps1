@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-  Reproducible Vulkan build of llama.cpp (SamurAI / AETHER — Phase 2, primary path).
+  Reproducible Vulkan build of llama.cpp (SamurAI / AETHER - Phase 2, primary path).
 
 .DESCRIPTION
   Builds the official ggml-org/llama.cpp source with the Vulkan backend so that ALL THREE

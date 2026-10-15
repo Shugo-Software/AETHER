@@ -1,0 +1,24 @@
+# Line-ending policy for a Windows-first pipeline repo.
+#   * PowerShell / cmd / bat text files want CRLF (cmd.exe is fussy about
+#     LF-only labels), everything else is stored as LF.
+#   * Without this, a single tool touching a file flips its endings and every
+#     line shows up as changed.
+* text=auto
+*.ps1  text eol=crlf
+*.cmd  text eol=crlf
+*.bat  text eol=crlf
+*.py   text eol=lf
+*.md   text eol=lf
+*.json text eol=lf
+*.jsonl text eol=lf
+*.csv  text eol=lf
+*.jinja text eol=lf
+*.txt  text eol=lf
+LICENSE text eol=lf
+.gitignore text eol=lf
+
+# Weights and evidence are never text.
+*.gguf       binary
+*.safetensors binary
+*.onnx       binary
+*.parquet    binary

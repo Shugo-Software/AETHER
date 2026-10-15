@@ -1,0 +1,3 @@
+timestamp_utc,backend,device,model,ctx,ngl,peak_vram_mib,pp_tps,tg_tps,ok,detail
+20261015T143609Z,CUDA,CUDA1,jadis-1.0-f16.gguf,2048,99,5429,82.9,27.3,True,53.0s
+20261015T143609Z,CUDA,CUDA1,jadis-1.0-f16.gguf,4096,99,5463,160.9,27.4,True,6.9s

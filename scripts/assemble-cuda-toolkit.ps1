@@ -1,7 +1,7 @@
 <#
 .SYNOPSIS
   Assemble a complete, buildable CUDA toolkit on G: from the extracted CUDA 12.8.1
-  installer payload — WITHOUT installing to C: (which is nearly full).
+  installer payload - WITHOUT installing to C: (which is nearly full).
 
 .DESCRIPTION
   The official CUDA Windows installer is a self-extracting 7z archive. We extract its

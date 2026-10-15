@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-  Reproducible CUDA build of llama.cpp (SamurAI / AETHER — Phase 2).
+  Reproducible CUDA build of llama.cpp (SamurAI / AETHER - Phase 2).
 
 .DESCRIPTION
   Builds the official ggml-org/llama.cpp source with the NVIDIA CUDA backend,
