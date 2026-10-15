@@ -39,6 +39,7 @@
 | 8 | Model export: merge LoRA → standalone fp16 model → GGUF (f16/q8_0/q4_k_m) → optional HF push, with independent verification | ✅ 2026-10-15 — `docs/export.md`; `exports/lfm25-jadis-starcoder/` (merged + f16 + q4_k_m), `scripts/verify_export.py` **2/2 passed** |
 | 9 | DPO / preference optimization (`trl` on the pinned env) | ⬜ |
 | 10 | Jadis 1.0 release: fix the `<think>` turn shape, retrain fresh, multi-quant export (+ license/card), 3 GB runbook, independent eval | ✅ 2026-10-15 — adapter `jadis-1.0` (75 rows, 10 epochs, loss 1.6664); `exports/jadis-1.0/` = merged + 7 GGUFs; `verify_export` 2/2; eval `logs/eval-jadis-1.0-nothink.md`; see `student-training.md`, `export.md`, `benchmarks.md` |
+| 11 | Jadis Pro: external dataset ingest, dual-student endpoints (3 GB + 6 GB cards), teacher-as-judge recursive loop, ShugoSoftware release | 🔄 2026-10-15 — corpus `phase6_pro1`, `docs/recursive-loop.md` |
 
 > **Names vs lineage (updated 2026-10-15):** `adapters/lfm25-jadis-starcoder` is
 > **misnamed** — its run record says `dataset: phase6_pilot1.jsonl`, `rows: 75`,
@@ -172,6 +173,8 @@ Canonical list lives in `hardware-inventory.md`. Key ones for this phase:
 | `scripts/eval_jadis.py` | Behaviour eval: base vs base+adapter, two prompt conventions (`template` prefill vs `raw`), auto metrics (`</think>` close/lead, preamble, per-recipe format, memory overlap) → `logs/eval-<tag>.md`/`.json`; `--samples` feeds the dashboard |
 | `scripts/serve_student.ps1` | Student endpoint lifecycle: start/stop one GGUF on one pinned GPU (`-Device CUDA1|CUDA2 -Port 8082/8083 -Alias`), health-waited, PID-guarded stop, logs under `logs/` |
 | `scripts/review_students.py` | Teacher-as-judge review: student answers (temp 0) are graded against the corpus reference with a strict JSON rubric → `logs/review-<tag>.jsonl` + `.md` (pass rate, mean score, per-recipe, worst verdicts); `--eval-math` switches to the eval-only set |
+| `scripts/recursive_train.py` | The recursive loop: train → export → serve → review → gate → build the fix corpus; state in `logs/loop-<tag>.json` — `docs/recursive-loop.md` |
+| `docs/recursive-loop.md` | Phase 11 protocol: three endpoints, judge rubric and its three hard-won constraints, gate semantics, honest limits |
 | `scripts/bench_3gb.py` | 3 GB deployment sweep: llama-cli per (quant × ctx × backend) with peak-VRAM sampling → `docs/benchmarks/three_gb_<stamp>.csv` |
 | `exports/<name>/` | Export output: merged fp16 safetensors + tokenizer + `chat_template.jinja`, `<name>-<quant>.gguf` set, generated `README.md` model card, `LICENSE`, `export-manifest.json` |
 | `adapters/jadis-1.0` | **Release adapter** — fresh QLoRA on `phase6_pilot1.jsonl` (75 rows, 10 epochs) with the corrected `<think>` turn shape |

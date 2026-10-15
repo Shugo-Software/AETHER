@@ -89,6 +89,10 @@ def parse_args():
     ap.add_argument("--teacher-model", default="qwen3.5-9b-teacher")
     ap.add_argument("--student-max-tokens", type=int, default=512)
     ap.add_argument("--judge-max-tokens", type=int, default=1200)
+    ap.add_argument("--correct-failures", default=None,
+                    help="path to append teacher model answers for FAILED rows "
+                         "(the next iteration's training data)")
+    ap.add_argument("--correct-max-tokens", type=int, default=600)
     ap.add_argument("--timeout", type=int, default=600)
     ap.add_argument("--tag", default=None, help="report name (default: <dataset>-<student>)")
     return ap.parse_args()
@@ -151,6 +155,29 @@ def parse_json_loose(text):
 
 _SCORE_RE = re.compile(r'"score"\s*:\s*([1-5])')
 _PASS_RE = re.compile(r'"pass"\s*:\s*(true|false)')
+
+CORRECT_SYSTEM = (
+    "You are an expert answering a technical task. Write the answer a strong "
+    "model should give: correct, complete, concrete and tight. No preamble, no "
+    "meta-commentary, no restating the task. Obey every stated constraint "
+    "(length limits, required sections, output formats)."
+)
+
+
+def correct(row, rec, args):
+    """Teacher-written answer for a failed row -> next iteration's supervision."""
+    user = ("TASK:\n%s\n\nREFERENCE ANSWER (expert, for grounding):\n%s\n\n"
+            "A student model answered this task and was graded %s/5. Problems "
+            "found: %s\n\nWrite the answer it should have given."
+            % (row["prompt"][:3000], (row.get("completion") or "")[:2000],
+               rec.get("score"), rec.get("critique") or "-"))
+    payload = {"messages": [{"role": "system", "content": CORRECT_SYSTEM},
+                            {"role": "user", "content": user}],
+               "max_tokens": args.correct_max_tokens,
+               "temperature": 0.2,
+               "chat_template_kwargs": {"enable_thinking": False}}
+    data = post(args.teacher_port, payload, args.timeout)
+    return (data["choices"][0]["message"].get("content") or "").strip()
 
 
 def extract_verdict(raw):
@@ -304,6 +331,45 @@ def main():
                  statistics.mean([r["score"] for r in rs])))
     print("[review] verdicts -> %s" % jsonl_path)
     print("[review] report   -> %s" % md_path)
+
+    if args.correct_failures:
+        row_by_id = {r.get("id"): r for r in rows}
+        failed = [r for r in scored if not r.get("pass")]
+        written = 0
+        os.makedirs(os.path.dirname(os.path.abspath(args.correct_failures)),
+                    exist_ok=True)
+        with open(args.correct_failures, "a", encoding="utf-8") as fh:
+            for rec in failed:
+                row = row_by_id.get(rec.get("id"))
+                if not row:
+                    continue
+                try:
+                    fix = correct(row, rec, args)
+                except Exception as e:  # noqa: BLE001
+                    print("[review] correction failed for %s: %s"
+                          % (rec.get("id"), e), flush=True)
+                    continue
+                if not fix:
+                    continue
+                fh.write(json.dumps({
+                    "id": "%s-fix" % row.get("id"),
+                    "source": "teacher-correction",
+                    "recipe": row.get("recipe"),
+                    "system": row.get("system"),
+                    "prompt": row.get("prompt"),
+                    "completion": fix,
+                    "provenance": {"from_row": row.get("id"),
+                                   "student": args.student,
+                                   "review_tag": tag},
+                    "meta": {"from_score": rec.get("score"),
+                             "critique": rec.get("critique"),
+                             "generated_utc": now()},
+                }, ensure_ascii=False) + "\n")
+                written += 1
+                print("[review] correction for %s (was %s/5, %d chars)"
+                      % (row.get("id"), rec.get("score"), len(fix)), flush=True)
+        print("[review] wrote %d teacher correction(s) -> %s"
+              % (written, args.correct_failures), flush=True)
     return 0
 
 
