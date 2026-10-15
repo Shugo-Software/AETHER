@@ -1,0 +1,51 @@
+{
+  "tag": "pro1",
+  "created_utc": "2026-10-15T16:51:57+00:00",
+  "params": {
+    "n_a": 400,
+    "n_b": 100,
+    "recipes": "explain_code,qa_pairs,code_review",
+    "endpoint": "http://127.0.0.1:8080/v1",
+    "model": "qwen3.5-9b-teacher",
+    "max_tokens": 1024,
+    "temperature": 0.6,
+    "think": false,
+    "seed": 20261015
+  },
+  "system_prompt": "You are a precise senior Python engineer producing high-quality training material. Use only what is given. Be concrete and correct. No preamble, no meta-commentary, no markdown code fences around your whole answer unless the recipe asks for code.",
+  "counts": {
+    "requested": 500,
+    "written": 500,
+    "failed": 0
+  },
+  "completion_chars": {
+    "min": 229,
+    "median": 1380,
+    "max": 5009
+  },
+  "elapsed_sec": null,
+  "corpus": {
+    "repo": "bigcode/starcoderdata",
+    "gated": "auto (ToU accepted)",
+    "shard": "corpus\\starcoderdata\\python\\train-00000-of-00059.parquet",
+    "sha256": "407cf6628d01fe2da72ac301d669fc99a75b223a1defe71a48ab583dcb047c70"
+  },
+  "output": {
+    "jsonl": "phase6_pro1.jsonl",
+    "sha256": "f0dc4c2f89b163b7db0f036a700fdaca50d7b3331a71153859192b0eb93a9fed"
+  },
+  "manifest_reconstructed": true,
+  "note": "rebuilt from the existing JSONL via --remanifest; per-row generation metadata lives in each record's `meta`",
+  "file_counts": {
+    "sources": {
+      "starcoderdata": 400,
+      "teacher-gen": 100
+    },
+    "recipes": {
+      "explain_code": 134,
+      "qa_pairs": 133,
+      "code_review": 133,
+      "seed_gen": 100
+    }
+  }
+}

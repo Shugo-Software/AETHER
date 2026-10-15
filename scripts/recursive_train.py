@@ -136,6 +136,15 @@ def main():
               "epochs": args.epochs, "steps": {}}
     export_dir = os.path.join(ROOT, "exports", args.tag)
 
+    # 0. free the 6 GB card: training and student B cannot share it. This also
+    #    guarantees the later serve step starts from a clean slate.
+    if not args.skip_train or not args.skip_serve:
+        serve = os.path.join(ROOT, "scripts", "serve_student.ps1")
+        ok, tail = run([POWERSHELL, "-ExecutionPolicy", "Bypass", "-File", serve,
+                        "-StopAll"], "loop-%s-it%d-pre-stop.log"
+                       % (args.tag, args.iteration))
+        record["steps"]["pre_stop"] = {"ok": ok, "tail": tail}
+
     # 1. train
     if not args.skip_train:
         ok, tail = run([PY, "-u", os.path.join(ROOT, "scripts", "train_student.py"),

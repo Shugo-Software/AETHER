@@ -200,12 +200,44 @@ def main() -> int:
                     help="enable teacher thinking (default: off, ~30x cheaper)")
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--tag", default=datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ"))
+    ap.add_argument("--remanifest", default=None,
+                    help="rebuild the manifest for an existing JSONL and exit "
+                         "(no teacher calls, no generation)")
     args = ap.parse_args()
 
     recipes = [r.strip() for r in args.recipes.split(",") if r.strip()]
     for r in recipes:
         if r not in RECIPES:
             ap.error(f"unknown recipe {r!r}; choices: {', '.join(RECIPES)}")
+
+    if args.remanifest:
+        path = (args.remanifest if os.path.isabs(args.remanifest)
+                else os.path.join(ROOT, args.remanifest))
+        if not os.path.isfile(path):
+            print(f"[fatal] no such jsonl: {path}", file=sys.stderr)
+            return 2
+        n_ok, lens = validate_jsonl(path)
+        args.tag = os.path.basename(path).replace(".jsonl", "") \
+            .replace("phase6_", "")
+        man = _build_manifest(args, path, n_ok, n_ok, lens, 0, None, None,
+                              reconstructed=True)
+        # Counts verifiable from the file itself (unlike CLI params, which the
+        # operator must restate): sources and recipes actually present.
+        src, rcp = {}, {}
+        with open(path, encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                rec = json.loads(line)
+                src[rec.get("source")] = src.get(rec.get("source"), 0) + 1
+                rcp[rec.get("recipe")] = rcp.get(rec.get("recipe"), 0) + 1
+        man["file_counts"] = {"sources": src, "recipes": rcp}
+        out_man = path.replace(".jsonl", ".manifest.json")
+        with open(out_man, "w", encoding="utf-8") as fh:
+            json.dump(man, fh, indent=2, ensure_ascii=False)
+        print(f"[remanifest] {n_ok} rows -> {out_man}")
+        return 0
 
     os.makedirs(OUT_DIR, exist_ok=True)
     out_path = os.path.join(OUT_DIR, f"phase6_{args.tag}.jsonl")
@@ -251,6 +283,42 @@ def main() -> int:
     return _run(args, jobs, out_path, manifest_path, corpus_meta)
 
 
+def _build_manifest(args, out_path, requested, n_ok, lens, fails, elapsed,
+                    corpus_meta=None, reconstructed=False):
+    """Provenance record for a JSONL.
+
+    Also used by `--remanifest` to rebuild a manifest for an existing dataset
+    without regenerating it. NOTE: every key here must exist on `args` — a stale
+    key (the Pile-track `source`/`subset`/`max_rows`/`scan_limit`) used to raise
+    AttributeError *after* a full generation run, losing the manifest.
+    """
+    manifest = {
+        "tag": args.tag,
+        "created_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "params": {k: getattr(args, k, None) for k in
+                   ("n_a", "n_b", "recipes", "endpoint", "model", "max_tokens",
+                    "temperature", "think", "seed")},
+        "system_prompt": SYSTEM,
+        "counts": {"requested": requested, "written": n_ok, "failed": fails},
+        "completion_chars": {"min": min(lens), "median": sorted(lens)[len(lens) // 2],
+                             "max": max(lens)} if lens else None,
+        "elapsed_sec": elapsed,
+        "corpus": corpus_meta if corpus_meta is not None else {
+            "repo": "bigcode/starcoderdata", "gated": "auto (ToU accepted)",
+            "shard": os.path.relpath(args.shard, ROOT)
+            if os.path.exists(args.shard) else None,
+            "sha256": sha256_file(args.shard) if os.path.exists(args.shard) else None},
+        "output": {"jsonl": os.path.basename(out_path),
+                   "sha256": sha256_file(out_path)},
+    }
+    if reconstructed:
+        manifest["manifest_reconstructed"] = True
+        manifest["note"] = ("rebuilt from the existing JSONL via --remanifest; "
+                            "per-row generation metadata lives in each record's "
+                            "`meta`")
+    return manifest
+
+
 def _run(args, jobs: list[dict], out_path: str, manifest_path: str,
          corpus_meta: dict | None = None) -> int:
     t0 = time.time()
@@ -287,25 +355,8 @@ def _run(args, jobs: list[dict], out_path: str, manifest_path: str,
                   f"tok={usage.get('completion_tokens')} {rate:.2f} samples/s")
 
     n_ok, lens = validate_jsonl(out_path)
-    manifest = {
-        "tag": args.tag,
-        "created_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        "params": {k: getattr(args, k) for k in
-                   ("n_a", "n_b", "recipes", "source", "subset", "max_rows",
-                    "scan_limit", "endpoint", "model", "max_tokens", "temperature",
-                    "think", "seed")},
-        "system_prompt": SYSTEM,
-        "counts": {"requested": len(jobs), "written": n_ok, "failed": fails},
-        "completion_chars": {"min": min(lens), "median": sorted(lens)[len(lens) // 2],
-                             "max": max(lens)} if lens else None,
-        "elapsed_sec": round(time.time() - t0, 1),
-        "corpus": corpus_meta if corpus_meta is not None else {
-            "repo": "bigcode/starcoderdata", "gated": "auto (ToU accepted)",
-            "shard": os.path.relpath(args.shard, ROOT) if os.path.exists(args.shard) else None,
-            "sha256": sha256_file(args.shard) if os.path.exists(args.shard) else None},
-        "output": {"jsonl": os.path.basename(out_path),
-                   "sha256": sha256_file(out_path)},
-    }
+    manifest = _build_manifest(args, out_path, len(jobs), n_ok, lens, fails,
+                               round(time.time() - t0, 1), corpus_meta)
     with open(manifest_path, "w", encoding="utf-8") as fh:
         json.dump(manifest, fh, indent=2, ensure_ascii=False)
 
