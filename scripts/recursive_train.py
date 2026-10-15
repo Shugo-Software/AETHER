@@ -153,24 +153,52 @@ def main():
     else:
         record["steps"]["train"] = {"ok": True, "skipped": True}
 
-    # 2. export + quantize (merge + f16 conversion + both qants)
+    # 2. export: merge -> f16 GGUF (f16 is the source for every quant)
+    quants = []
     if not args.skip_export:
-        quants = ["f16", args.quant_a] if args.quant_a != "f16" else ["f16"]
-        if args.quant_b not in quants:
-            quants.append(args.quant_b)
         cmd = [PY, "-u", os.path.join(ROOT, "scripts", "export_model.py"),
                "--adapter", args.tag, "--name", args.tag,
-               "--title", args.tag.upper(), "--gguf", ",".join(quants)]
-        if "iq4_xs" in quants and os.path.isfile(args.imatrix):
-            cmd += ["--imatrix", args.imatrix]
+               "--title", args.tag.upper(), "--gguf", "f16"]
         ok, tail = run(cmd, "loop-%s-it%d-export.log" % (args.tag, args.iteration))
-        record["steps"]["export"] = {"ok": ok, "tail": tail, "quants": quants}
+        record["steps"]["export"] = {"ok": ok, "tail": tail, "quants": ["f16"]}
         if not ok:
             record["status"] = "failed:export"
             save(state, state_path, record)
             return 1
     else:
         record["steps"]["export"] = {"ok": True, "skipped": True}
+
+    # 2b. quantize for the cards. iq4_xs gets a FRESH importance matrix computed
+    # from this iteration's weights (an imatrix from older weights is a
+    # measurable quality regression), then f16 for the 6 GB card.
+    if not args.skip_export:
+        f16 = os.path.join(export_dir, "%s-f16.gguf" % args.tag)
+        imatrix = os.path.join(ROOT, "cache", "quants",
+                               "imatrix-%s.gguf" % args.tag)
+        calib = os.path.join(ROOT, "cache", "quants", "calib.txt")
+        bin_dir = os.path.join(ROOT, "builds", "cuda", "bin")
+        if "iq4_xs" in (args.quant_a, args.quant_b):
+            if os.path.isfile(calib):
+                ok, tail = run([os.path.join(bin_dir, "llama-imatrix.exe"),
+                                "-m", f16, "-f", calib, "-o", imatrix,
+                                "-ngl", "99", "-c", "512", "--chunks", "48"],
+                               "loop-%s-it%d-imatrix.log" % (args.tag, args.iteration))
+                record["steps"]["imatrix"] = {"ok": ok, "tail": tail,
+                                              "path": imatrix}
+                if ok:
+                    ok2, tail2 = run([os.path.join(bin_dir, "llama-quantize.exe"),
+                                      "--imatrix", imatrix, f16,
+                                      os.path.join(export_dir,
+                                                   "%s-iq4_xs.gguf" % args.tag),
+                                      "IQ4_XS"],
+                                     "loop-%s-it%d-requant.log"
+                                     % (args.tag, args.iteration))
+                    record["steps"]["imatrix"]["quantized"] = ok2
+                    record["steps"]["imatrix"]["tail2"] = tail2
+            else:
+                record["steps"]["imatrix"] = {"ok": False,
+                                              "error": "calibration text missing"}
+        record["steps"]["export"]["quants"] = ["f16", args.quant_a, args.quant_b]
 
     # 3. restart both student endpoints on the new weights
     if not args.skip_serve:
