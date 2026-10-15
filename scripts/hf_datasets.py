@@ -211,6 +211,7 @@ def upsert(data, repo, note=None, **kw):
         data["datasets"].append(e)
     e.update(kw)
     if note:
+        e["note"] = note          # the dashboard's "why" column reads this
         e["history"].append({"utc": now(), "note": note})
     return e
 
@@ -409,6 +410,51 @@ def fit(repo, max_len=1536, anchor="datasets/phase6_pilot1.jsonl", log=print,
     log("[hf] fitted %s: %d rows (dropped %s)"
         % (os.path.relpath(out, ROOT), rows, prov.get("dropped")))
     return e
+
+
+def rewrite(repo, tag=None, limit=200, max_len=1536, log=print):
+    """Teacher-distil a trace dataset into lessons, then verify + fit them.
+
+    For datasets that hold no prompt->answer pairs (agentic traces), the teacher
+    reads each trace digest and writes a self-contained lesson instead. The
+    lessons become the corpus, so the usual verify/fit stages still apply.
+    """
+    data = load_registry()
+    e = entry_of(data, repo) or upsert(data, repo)
+    local = e.get("local_dir") or local_dir_for(repo)
+    if not os.path.isdir(local):
+        raise SystemExit("no local copy for %s — run --pull first" % repo)
+    tag = tag or (slug_tag(repo)[:32] + "-lessons")
+    files = e.get("pulled_files") or []
+    if len(files) > 1:
+        files = [max(files, key=lambda f: os.path.getsize(os.path.join(local, f))
+                     if os.path.isfile(os.path.join(local, f)) else 0)]
+    cmd = [PY, "-u", os.path.join(SCRIPTS, "rewrite_traces.py"),
+           "--repo", repo, "--from-local", local, "--tag", tag,
+           "--limit", str(limit)]
+    if files:
+        cmd += ["--from-local-files", ",".join(files)]
+    log("[hf] $ %s" % " ".join(cmd))
+    proc = subprocess.run(cmd, cwd=ROOT)
+    out = os.path.join(DATASETS, tag + ".jsonl")
+    if proc.returncode != 0 or not os.path.isfile(out) or not count_rows(out):
+        upsert(data, repo, state="not_trainable",
+               note="rewrite produced no lessons (rc=%d) — see logs/rewrite-%s.log"
+                    % (proc.returncode, tag))
+        save_registry(data)
+        raise SystemExit("rewrite produced no lessons for %s" % repo)
+    rows = count_rows(out)
+    e = upsert(data, repo, state="converted", tag=tag, rewritten=True,
+               corpus=os.path.relpath(out, ROOT), corpus_rows=rows,
+               corpus_bytes=os.path.getsize(out),
+               note="teacher rewrite -> %s (%d lessons)" % (os.path.basename(out),
+                                                            rows))
+    save_registry(data)
+    log("[hf] %d lessons in %s" % (rows, os.path.relpath(out, ROOT)))
+    log("[hf] === %s: verify (lessons) ===" % repo)
+    verify(repo, max_len=max_len, log=log)
+    log("[hf] === %s: fit (lessons) ===" % repo)
+    return fit(repo, max_len=max_len, log=log)
 
 
 def mark(repo, state, **kw):
@@ -652,6 +698,9 @@ def main():
     ap.add_argument("--convert", metavar="REF", help="map the local copy to our schema")
     ap.add_argument("--verify", metavar="REF", help="measure the corpus (tokens)")
     ap.add_argument("--fit", metavar="REF", help="fit the corpus to --max-len")
+    ap.add_argument("--rewrite", metavar="REF",
+                    help="teacher-distil traces into lessons (for datasets with "
+                         "no prompt/answer pairs), then verify + fit")
     ap.add_argument("--train", metavar="REF", help="launch a loop iteration")
     ap.add_argument("--learned-verified", metavar="REF",
                     help="mark learned_verified if the gate passed")
@@ -730,7 +779,7 @@ def main():
 
     repo = None
     for ref in (a.pull, a.convert, a.verify, a.fit, a.train, a.drop,
-                a.advance, a.learned_verified):
+                a.advance, a.learned_verified, a.rewrite):
         if ref:
             repo = resolve_repo(ref)
     if repo is None:
@@ -745,6 +794,8 @@ def main():
         e = verify(repo, max_len=a.max_len, log=log)
     elif a.fit:
         e = fit(repo, max_len=a.max_len, log=log)
+    elif a.rewrite:
+        e = rewrite(repo, tag=a.tag, limit=a.limit, max_len=a.max_len, log=log)
     elif a.train:
         tag = a.tag or (entry_of(load_registry(), repo) or {}).get("tag") \
             or slug_tag(repo)
@@ -776,8 +827,8 @@ def main():
 
 
 JOBS_PATH = os.path.join(LOGS, "hf-jobs.json")
-JOBS = ["add", "pull", "convert", "verify", "fit", "train", "learned_verified",
-        "drop", "advance", "queue_run"]
+JOBS = ["add", "pull", "convert", "verify", "fit", "rewrite", "train",
+        "learned_verified", "drop", "advance", "queue_run"]
 
 
 def _load_jobs():

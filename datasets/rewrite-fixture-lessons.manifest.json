@@ -1,0 +1,51 @@
+{
+ "tag": "rewrite-fixture-lessons",
+ "created_utc": "2026-10-15T19:23:27+00:00",
+ "purpose": "training",
+ "params": {
+  "repo": "fixture/traces",
+  "from_local": "datasets",
+  "from_local_files": "rewrite-fixture.jsonl",
+  "local_pattern": null,
+  "tag": "rewrite-fixture-lessons",
+  "limit": 3,
+  "scan_limit": 100000,
+  "teacher_port": 8080,
+  "model": "qwen3.5-9b-teacher",
+  "timeout": 180,
+  "max_tokens": 700,
+  "digest_chars": 7000,
+  "task_min_chars": 40,
+  "task_max_chars": 6000,
+  "min_tool_turns": 1,
+  "question_min": 15,
+  "question_max": 240,
+  "answer_min": 40,
+  "answer_max": 1600,
+  "reasoning_max": 400,
+  "system": "You are a concise, precise assistant. No preamble, no meta-commentary.",
+  "dry_run": false,
+  "census": 0
+ },
+ "counts": {
+  "scanned": 3,
+  "written": 3,
+  "dropped": {}
+ },
+ "teacher": {
+  "model": "qwen3.5-9b-teacher",
+  "port": 8080,
+  "median_seconds": 2.7,
+  "digest_chars": 7000
+ },
+ "provenance": {
+  "source_files": [
+   "datasets\\rewrite-fixture.jsonl"
+  ],
+  "resumable_state": "datasets\\rewrite-fixture-lessons.rewrite-state.json"
+ },
+ "output": {
+  "jsonl": "datasets\\rewrite-fixture-lessons.jsonl",
+  "rows": 3
+ }
+}

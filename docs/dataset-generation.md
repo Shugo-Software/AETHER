@@ -186,6 +186,60 @@ The contrast is the point: the pipeline does not judge by likes or downloads
 (5.6k vs 39k), it measures what a 2.6B student could actually learn. Fable is
 excellent data for a frontier model that can act; it is not SFT data here.
 
+### Teacher rewrite: turning traces into lessons (2026-10-15)
+
+`scripts/rewrite_traces.py` is for datasets that hold **no prompt→answer pairs**.
+It reads each agentic trace, builds a **digest** (the task + the agent's own
+turns + `TOOL name(args)` per call + `RESULT[n chars]` heads, with a tools
+histogram up front and the middle elided to fit ~7k chars), asks the teacher for
+one **strict-JSON lesson** (`question` / `answer` / `reasoning`), validates it,
+and writes it in the training schema. The lessons then go through the normal
+verify → fit → train → gate path.
+
+What makes it usable at 10k-trace scale:
+
+- **filter before paying.** Traces whose task is a preamble *are skipped before
+  any teacher call* (`task_agentic`, `task_too_short`, `task_too_long`,
+  `no_work_in_trace`). This is not an optimisation — on the first Fable row a
+  19.5 s teacher call returned a lesson about one PowerShell sentence that
+  happened to sit inside the authoring preamble.
+- **resumable.** Progress is a state file plus an append-only JSONL: kill it,
+  restart it, it continues where it stopped (`--limit` is a target, not a cap).
+- **honest about refusal.** A lesson that leaks agentic scaffolding
+  (`tool_call`, "the transcript", repo paths), or is too short/long, is dropped
+  and *counted by reason*; zero lessons exits non-zero and the pipeline records
+  the dataset as `not_trainable` instead of shipping junk.
+- `--census N` counts what a rewrite could use, without spending teacher time;
+  `--dry-run` shows one real digest and the teacher's raw reply.
+
+**Measured verdict on `MoreThought/Fable-5.1-Max-Reasoning-Filtered-10000x`:
+0 of 10,000 traces can yield a lesson.** The census over the whole `full` split:
+
+| Measurement | Value |
+|---|---|
+| Traces kept by the filter | **0 / 10,000 (0%)** — all `task_agentic` (9,970 seed-spec, 30 autonomous-agent preambles) |
+| Task size | median 5,184 chars — every trace's "user turn" is the same wave-4 authoring preamble |
+| Agent narration per trace | **median 94 chars** across 25–55 assistant turns (no reasoning prose to distil) |
+| Tool calls | 816,686 — **94% have a placeholder name (`unknown_tool`, 384,395) or empty arguments (`{}`)**; the named ones are Bash ×183,990, Write ×138,020, WebFetch ×25,725, Edit ×18,295 |
+| Result | rewrite refused; dataset stays `not_trainable` |
+
+So this dataset fails *both* paths for the same underlying reason: it records
+that an agent worked, not what it was asked or why. To be rewritable a trace
+dataset needs a real task per row, named tool calls, and enough narration for a
+teacher to see the technique — which is a different kind of dataset, and the
+same command will handle it (`--rewrite org/name`).
+
+**What good looks like** (validated on `datasets/rewrite-fixture.jsonl`, three
+hand-built traces with real tasks, named tools and narration): 3/3 lessons, 0
+drops, **2.7 s per trace**, and the lessons teach exactly what the traces did —
+"why does a test that passes in isolation fail in a full suite?" (global state
+leaking; pass it locally), "how can I speed up a slow pandas job without changing
+its output?" (profile, then vectorise `apply`), "how do I make a config loader
+fail loudly on unknown keys without breaking optional ones?" (validate against a
+known-key set and raise). At that rate 10,000 *usable* traces would be ~7.5 h of
+teacher time, resumable.
+
+
 ### The anchor set is also the seed source — a structural conflict
 
 

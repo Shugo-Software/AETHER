@@ -1,0 +1,30 @@
+{
+ "tool": "scripts/fit_corpus.py",
+ "input": {
+  "path": "datasets\\rewrite-fixture-lessons.jsonl",
+  "sha256": "c9e52b7b87b9f1f38146d56d6c99b5756bf35d5bea185ece5bed38903b58e60e",
+  "rows": 3
+ },
+ "output": {
+  "path": "datasets\\rewrite-fixture-lessons-fit.jsonl",
+  "rows": 3
+ },
+ "policy": {
+  "max_len": 1536,
+  "max_per_prompt": 4,
+  "min_answer_tokens": 24,
+  "holdout": "datasets\\phase6_pilot1.jsonl",
+  "holdout_prompts": 60
+ },
+ "dropped": {
+  "prompt_too_long": 0,
+  "anchor_holdout": 0,
+  "answer_too_short_after_trim": 0,
+  "duplicate_cap": 0
+ },
+ "trimmed_rows": 0,
+ "estimated_full_row_tokens": {
+  "in": 436,
+  "out": 436
+ }
+}

@@ -296,9 +296,9 @@ def _hf_panel(snap):
                                         else (e.get('freed_human') or '-'))),
                         html.escape(str(e.get('fitted') or e.get('corpus') or '-')),
                         html.escape(why)))
-            for act, label in (('verify', 'verify'), ('fit', 'fit'),
-                               ('train', 'train'), ('learned_verified', 'gate'),
-                               ('drop', 'delete')):
+            for act, label in (('rewrite', 'rewrite'), ('verify', 'verify'),
+                               ('fit', 'fit'), ('train', 'train'),
+                               ('learned_verified', 'gate'), ('drop', 'delete')):
                 h.append('<button class="hfrow" data-act="%s" data-repo="%s">%s</button>'
                          % (act, html.escape(e['id']), label))
             h.append('</td></tr>')

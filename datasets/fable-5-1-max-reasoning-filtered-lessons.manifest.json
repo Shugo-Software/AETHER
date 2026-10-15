@@ -1,0 +1,52 @@
+{
+ "tag": "fable-5-1-max-reasoning-filtered-lessons",
+ "created_utc": "2026-10-15T19:22:39+00:00",
+ "purpose": "training",
+ "params": {
+  "repo": "MoreThought/Fable-5.1-Max-Reasoning-Filtered-10000x",
+  "from_local": "G:\\Program Prototype\\AETHER\\cache\\datasets\\MoreThought--Fable-5.1-Max-Reasoning-Filtered-10000x",
+  "from_local_files": null,
+  "local_pattern": null,
+  "tag": "fable-5-1-max-reasoning-filtered-lessons",
+  "limit": 5,
+  "scan_limit": 100000,
+  "teacher_port": 8080,
+  "model": "qwen3.5-9b-teacher",
+  "timeout": 180,
+  "max_tokens": 700,
+  "digest_chars": 7000,
+  "task_min_chars": 40,
+  "task_max_chars": 6000,
+  "min_tool_turns": 1,
+  "question_min": 15,
+  "question_max": 240,
+  "answer_min": 40,
+  "answer_max": 1600,
+  "reasoning_max": 400,
+  "system": "You are a concise, precise assistant. No preamble, no meta-commentary.",
+  "dry_run": false,
+  "census": 0
+ },
+ "counts": {
+  "scanned": 10000,
+  "written": 0,
+  "dropped": {
+   "skip:task_agentic:autonomous": 30,
+   "skip:task_agentic:seed_spec": 9970
+  }
+ },
+ "teacher": {
+  "model": "qwen3.5-9b-teacher",
+  "port": 8080,
+  "median_seconds": null,
+  "digest_chars": 7000
+ },
+ "provenance": {
+  "source_files": null,
+  "resumable_state": "datasets\\fable-5-1-max-reasoning-filtered-lessons.rewrite-state.json"
+ },
+ "output": {
+  "jsonl": "datasets\\fable-5-1-max-reasoning-filtered-lessons.jsonl",
+  "rows": 0
+ }
+}
