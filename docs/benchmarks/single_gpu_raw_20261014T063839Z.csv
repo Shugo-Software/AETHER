@@ -1,0 +1,16 @@
+timestamp_utc,backend,device,model,quant,ngl,n_prompt,n_gen,split_mode,run,pp_tps,tg_tps,peak_vram_mib,exit_ok
+20261014T063839Z,CUDA,CUDA0,qwen2.5-0.5b-instruct-q4_k_m.gguf,Q4_K_M,99,512,128,none,1,37169.49,506.41,1749,True
+20261014T063839Z,CUDA,CUDA0,qwen2.5-0.5b-instruct-q4_k_m.gguf,Q4_K_M,99,512,128,none,2,40218.68,521.39,1586,True
+20261014T063839Z,CUDA,CUDA0,qwen2.5-0.5b-instruct-q4_k_m.gguf,Q4_K_M,99,512,128,none,3,40102.3,523.13,1330,True
+20261014T063839Z,CUDA,CUDA1,qwen2.5-0.5b-instruct-q4_k_m.gguf,Q4_K_M,99,512,128,none,1,4806.17,117.47,761,True
+20261014T063839Z,CUDA,CUDA1,qwen2.5-0.5b-instruct-q4_k_m.gguf,Q4_K_M,99,512,128,none,2,4784.33,117.28,761,True
+20261014T063839Z,CUDA,CUDA1,qwen2.5-0.5b-instruct-q4_k_m.gguf,Q4_K_M,99,512,128,none,3,4778.71,117.7,761,True
+20261014T063839Z,Vulkan,Vulkan0,qwen2.5-0.5b-instruct-q4_k_m.gguf,Q4_K_M,99,512,128,none,1,23477.41,513.61,1369,True
+20261014T063839Z,Vulkan,Vulkan0,qwen2.5-0.5b-instruct-q4_k_m.gguf,Q4_K_M,99,512,128,none,2,29983.78,514.97,1348,True
+20261014T063839Z,Vulkan,Vulkan0,qwen2.5-0.5b-instruct-q4_k_m.gguf,Q4_K_M,99,512,128,none,3,29614.22,515.59,1369,True
+20261014T063839Z,Vulkan,Vulkan1,qwen2.5-0.5b-instruct-q4_k_m.gguf,Q4_K_M,99,512,128,none,1,2053.13,146.54,695,True
+20261014T063839Z,Vulkan,Vulkan1,qwen2.5-0.5b-instruct-q4_k_m.gguf,Q4_K_M,99,512,128,none,2,2098.23,146.38,695,True
+20261014T063839Z,Vulkan,Vulkan1,qwen2.5-0.5b-instruct-q4_k_m.gguf,Q4_K_M,99,512,128,none,3,2093.77,146.27,695,True
+20261014T063839Z,Vulkan,Vulkan2,qwen2.5-0.5b-instruct-q4_k_m.gguf,Q4_K_M,99,512,128,none,1,1905.37,45.25,,True
+20261014T063839Z,Vulkan,Vulkan2,qwen2.5-0.5b-instruct-q4_k_m.gguf,Q4_K_M,99,512,128,none,2,1906.27,45.25,,True
+20261014T063839Z,Vulkan,Vulkan2,qwen2.5-0.5b-instruct-q4_k_m.gguf,Q4_K_M,99,512,128,none,3,1899.9,45.2,,True

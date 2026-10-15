@@ -1,0 +1,30 @@
+# AETHER Python environment (Windows, Python 3.13)
+# Rendered from the working venv on 2026-10-15.
+#
+# The torch pin is deliberate and load-bearing: 2.14.0+cu126 is the last
+# prebuilt wheel line that still ships Pascal (sm_61) kernels — the GTX 1060s
+# will not train on anything newer without a source build.
+#   pip install torch==2.14.0+cu126 --index-url https://download.pytorch.org/whl/cu126
+#
+# Pascal constraints enforced by the code: fp16 compute only (no bf16), no
+# flash-attention, plain transformers Trainer (TRL's fused LM head needs Triton).
+torch==2.14.0+cu126
+transformers==5.19.0
+peft==0.21.2
+bitsandbytes==0.50.2
+accelerate==1.15.0
+trl==1.15.0
+datasets==5.1.0
+huggingface-hub==2.2.0
+tokenizers==0.23.3
+safetensors==0.8.0
+pyarrow==26.0.0
+numpy==2.5.4
+pandas==3.0.6
+psutil==7.2.2
+packaging==26.3
+regex==2026.9.29
+tqdm==4.70.1
+# GGUF metadata dumping uses llama.cpp's gguf-py via PYTHONPATH (not pip):
+#   set AETHER_LLAMA_CPP_SRC=<llama.cpp checkout>
+#   set PYTHONPATH=%AETHER_LLAMA_CPP_SRC%\gguf-py

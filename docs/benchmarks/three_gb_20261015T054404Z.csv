@@ -1,0 +1,2 @@
+timestamp_utc,backend,device,model,ctx,ngl,peak_vram_mib,pp_tps,tg_tps,ok,detail
+20261015T054404Z,CUDA,CUDA2,lfm25-jadis-starcoder-q4_k_m.gguf,4096,99,1807,,,True,18.0s

@@ -1,0 +1,37 @@
+{
+  "tag": "pilot1",
+  "created_utc": "2026-10-14T16:08:24+00:00",
+  "params": {
+    "n_a": 50,
+    "n_b": 25,
+    "recipes": "explain_code,qa_pairs,code_review",
+    "endpoint": "http://127.0.0.1:8080/v1",
+    "model": "qwen3.5-9b-teacher",
+    "max_tokens": 1024,
+    "temperature": 0.6,
+    "think": false,
+    "seed": 42
+  },
+  "system_prompt": "You are a precise senior Python engineer producing high-quality training material. Use only what is given. Be concrete and correct. No preamble, no meta-commentary, no markdown code fences around your whole answer unless the recipe asks for code.",
+  "counts": {
+    "requested": 75,
+    "written": 75,
+    "failed": 0
+  },
+  "completion_chars": {
+    "min": 480,
+    "median": 1337,
+    "max": 4729
+  },
+  "elapsed_sec": 541.5,
+  "corpus": {
+    "repo": "bigcode/starcoderdata",
+    "gated": "auto (ToU accepted)",
+    "shard": "corpus\\starcoderdata\\python\\train-00000-of-00059.parquet",
+    "sha256": "407cf6628d01fe2da72ac301d669fc99a75b223a1defe71a48ab583dcb047c70"
+  },
+  "output": {
+    "jsonl": "phase6_pilot1.jsonl",
+    "sha256": "ae0e717cb9b54fbb81d8ae05c4dc4718dbe2c182074749993589a0a76b12f9d0"
+  }
+}

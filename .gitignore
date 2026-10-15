@@ -1,0 +1,60 @@
+# ---------------------------------------------------------------------------
+# AETHER — source only. Toolchains, model weights, datasets and caches are
+# machine-local and are NOT published from this repository:
+# model weights live on the Hugging Face org, benchmarks are in docs/.
+# ---------------------------------------------------------------------------
+
+# --- toolchains, virtualenvs, build trees (multi-GB, machine specific) ------
+venvs/
+builds/
+toolchains/
+models/
+vendor/
+
+# --- model artifacts -------------------------------------------------------
+exports/
+adapters/
+*.gguf
+*.safetensors
+*.onnx
+*.pt
+*.pth
+
+# --- data and caches (regenerate with the scripts; manifests stay) ---------
+datasets/*.jsonl
+datasets/eval/*.jsonl
+corpus/
+cache/
+logs/
+*.log
+
+# --- machine dumps and verbose benchmark output ----------------------------
+docs/raw/
+docs/benchmarks/*verbose*.log
+
+# --- Python ----------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# --- editors / OS ----------------------------------------------------------
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
+*.swp
+
+# --- local leftovers -------------------------------------------------------
+*.orig
+*.rej
+*.bak
+*.bak[0-9]*
+*.tmp
+
+# --- secrets (the pipeline never writes these; belt and braces) ------------
+.env
+.env.*
+*.pem
+*.key
+credentials.json

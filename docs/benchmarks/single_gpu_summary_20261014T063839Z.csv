@@ -1,0 +1,6 @@
+backend,device,pp512_tps_median,tg128_tps_median,peak_vram_mib,runs,model,quant,ngl,n_prompt,n_gen
+CUDA,CUDA0,40102.3,521.39,1330,3,qwen2.5-0.5b-instruct-q4_k_m.gguf,Q4_K_M,99,512,128
+CUDA,CUDA1,4784.33,117.47,761,3,qwen2.5-0.5b-instruct-q4_k_m.gguf,Q4_K_M,99,512,128
+Vulkan,Vulkan0,29614.22,514.97,1369,3,qwen2.5-0.5b-instruct-q4_k_m.gguf,Q4_K_M,99,512,128
+Vulkan,Vulkan1,2093.77,146.38,695,3,qwen2.5-0.5b-instruct-q4_k_m.gguf,Q4_K_M,99,512,128
+Vulkan,Vulkan2,1905.37,45.25,,3,qwen2.5-0.5b-instruct-q4_k_m.gguf,Q4_K_M,99,512,128

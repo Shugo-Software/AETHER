@@ -1,0 +1,2 @@
+timestamp_utc,backend,device,model,ctx,ngl,peak_vram_mib,pp_tps,tg_tps,ok,detail
+20261015T054349Z,CUDA,CUDA2,lfm25-jadis-starcoder-q4_k_m.gguf,4096,99,0,,,False,exit 1: error: invalid argument: -no-cnv
