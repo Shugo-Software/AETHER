@@ -1,0 +1,36 @@
+{
+  "tag": "openai-math",
+  "created_utc": "2026-10-15T08:24:20+00:00",
+  "purpose": "eval-only — never used for training",
+  "params": {
+    "source": "openai-math",
+    "tag": null,
+    "split": null,
+    "limit": 500,
+    "scan_limit": 20000,
+    "max_prompt_chars": 4000,
+    "max_completion_chars": 4000,
+    "max_fences": 3
+  },
+  "source": {
+    "repo": "FineEnvs/openai-math",
+    "split": "default",
+    "revision": "d7056fd31c19fd1a0aed0a0bc3e99026d412b2ca"
+  },
+  "counts": {
+    "scanned": 369,
+    "written": 369,
+    "dropped": {
+      "prompt_truncated": 333
+    }
+  },
+  "completion_chars": {
+    "min": 78,
+    "median": 91,
+    "max": 107
+  },
+  "output": {
+    "jsonl": "datasets\\eval\\openai-math.jsonl",
+    "sha256": "63e9fa308890d7a279815a45387f54f7cf8a3f5bbe5aaf1191924f275b4c145d"
+  }
+}

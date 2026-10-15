@@ -46,3 +46,52 @@ deleted. Only the two StarCoder-backed sources (A/B below the title) remain.
    batch (seeded order makes this auditable).
 4. Record any recipe wording changes in the manifest's `system_prompt`
    (edit + re-run from a new tag — never silently mutate).
+
+## External dataset ingest (Phase 11, 2026-10-15)
+
+`scripts/ingest_hf_dataset.py` imports third-party datasets into the same record
+schema (`{id, source, recipe, system, prompt, completion, reasoning?, provenance,
+meta}`) plus a manifest that pins the **source revision sha** and counts every
+drop reason. Two destinations, deliberately different:
+
+| Source | Output | Purpose |
+|---|---|---|
+| `FineEnvs/openai-math` (apache-2.0) | `datasets/eval/openai-math.jsonl` | **eval only** — 369 rows, recipe `proof_approach`, prompts trimmed to 4,000 chars (333/369 were longer) |
+| `MoreThought/Fable-5.1-Max-Reasoning-Filtered-10000x` (apache-2.0) | *nothing written* | **rejected as training data** — see below |
+
+### Why Fable-5.1 was rejected (measured, not assumed)
+
+The dataset card reads like reasoning data (10k<n<100k rows, `format:json`,
+apache-2.0). The rows are **agentic coding-agent transcripts**:
+
+| Measurement | `train` (5k) | `full` (10k) |
+|---|---|---|
+| rows sampled | 300 | 400 |
+| rows containing `tool_calls` | **300 / 300** | **400 / 400** |
+| messages per row | 45–85, assistant/tool alternating | 45–85 |
+| rows with a repo-scale authoring preamble | 294 / 300 | same shape |
+| user prompt chars (median / max) | 4,908 / 9,002 | 4,947 / 9,003 |
+| final assistant chars (median) | 132 (a status report) | **0** — usually empty |
+
+There is no self-contained prompt→answer pair to select. Training on them would
+teach a 2.6B student to *report on* repo-scale work it cannot possibly do — the
+opposite of the direct, no-fabrication behaviour Jadis 1.0 was engineered for.
+The ingester therefore writes nothing for this source and exits non-zero **with
+the evidence printed**, so a future run cannot silently "succeed" with junk.
+
+For training data at this scale use the teacher recipes over the StarCoder shard
+(`explain_code` / `qa_pairs` / `code_review` / `seed_gen`): self-contained,
+grounded in supplied code, and already proven to shape the student — see
+`student-training.md`.
+
+### Operator notes (Windows)
+
+- `openai-math` ships a custom `harbor` loader inside `datasets` that reads its
+  files with the *platform* codec (cp1252 here) → `UnicodeDecodeError` on valid
+  UTF-8. The ingester re-executes itself with `PYTHONUTF8=1`; it uses a
+  **list-args `subprocess`**, because a spaced install path (`Program Prototype`)
+  gets re-split by `os.execve` — the same Windows quoting trap documented in
+  `student-training.md`.
+- Datasets under `datasets/eval/` are unreachable from the training control
+  plane by construction: datasets launch by bare filename from `datasets/`, so
+  `eval/openai-math.jsonl` cannot be selected (dashboard or API).
