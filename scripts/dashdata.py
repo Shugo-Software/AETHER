@@ -5,10 +5,27 @@ import json
 import os
 import re
 import subprocess
+import time
 import urllib.request
 from datetime import datetime, timezone
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+# The page polls every 5s, so anything that shells out or touches the network is
+# cached: without this, snapshot() cost 6.5s+ (endpoints 4.7s, host 1.7s) and the
+# browser had overlapping requests in flight permanently. gpu_state is cheap
+# (one nvidia-smi, ~0.15s) and stays live so the numbers still move.
+_CACHE = {}
+
+
+def _cached(key, ttl, fn):
+    now = time.monotonic()
+    hit = _CACHE.get(key)
+    if hit and now - hit[0] < ttl:
+        return hit[1]
+    val = fn()
+    _CACHE[key] = (now, val)
+    return val
 
 PHASES = [
     ('1', 'Inventory + principles', 'done', 'hardware-inventory.md'),
@@ -28,18 +45,216 @@ LOGS_TO_KEEP = 3
 
 
 def gpu_state():
+    """Live per-GPU telemetry. Temperature/power are optional: Pascal cards can
+    report [N/A] for power, so a missing field must not break the panel."""
     try:
-        out = subprocess.run(['nvidia-smi', '--query-gpu=index,name,utilization.gpu,memory.used,memory.total',
-                              '--format=csv,noheader,nounits'], capture_output=True, text=True, timeout=10)
+        out = subprocess.run(['nvidia-smi',
+                              '--query-gpu=index,name,utilization.gpu,memory.used,'
+                              'memory.total,temperature.gpu,power.draw,'
+                              'power.limit',
+                              '--format=csv,noheader,nounits'],
+                             capture_output=True, text=True, timeout=10)
         gpus = []
         for line in out.stdout.strip().splitlines():
             parts = [p.strip() for p in line.split(',')]
-            if len(parts) == 5:
-                idx, name, util, used, total = parts
-                gpus.append({'index': idx, 'name': name, 'util': float(util), 'used': float(used), 'total': float(total), 'pct': round(100 * float(used) / float(total), 1)})
+            if len(parts) < 5:
+                continue
+            idx, name, util, used, total = parts[:5]
+            rest = parts[5:]
+
+            def _num(v):
+                try:
+                    return float(v)
+                except (TypeError, ValueError):
+                    return None
+            gpus.append({'index': idx, 'name': name, 'util': float(util),
+                         'used': float(used), 'total': float(total),
+                         'pct': round(100 * float(used) / float(total), 1),
+                         'temp': _num(rest[0]) if rest else None,
+                         'power': _num(rest[1]) if len(rest) > 1 else None,
+                         'power_limit': _num(rest[2]) if len(rest) > 2 else None})
         return gpus
     except Exception as e:
         return [{'error': str(e)}]
+
+
+def host_state():
+    """CPU load and RAM. RAM comes from the Win32 struct (instant); CPU needs a
+    subprocess, so it is the part worth caching."""
+    ram = None
+    try:
+        import ctypes
+
+        class MEMORYSTATUSEX(ctypes.Structure):
+            _fields_ = [("dwLength", ctypes.c_ulong),
+                        ("dwMemoryLoad", ctypes.c_ulong),
+                        ("ullTotalPhys", ctypes.c_ulonglong),
+                        ("ullAvailPhys", ctypes.c_ulonglong),
+                        ("ullTotalPageFile", ctypes.c_ulonglong),
+                        ("ullAvailPageFile", ctypes.c_ulonglong),
+                        ("ullTotalVirtual", ctypes.c_ulonglong),
+                        ("ullAvailVirtual", ctypes.c_ulonglong),
+                        ("ullAvailExtendedVirtual", ctypes.c_ulonglong)]
+
+        stat = MEMORYSTATUSEX()
+        stat.dwLength = ctypes.sizeof(MEMORYSTATUSEX)
+        if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(stat)):
+            gb = 1024.0 ** 3
+            total = stat.ullTotalPhys / gb
+            avail = stat.ullAvailPhys / gb
+            ram = {'used_gb': round(total - avail, 1), 'total_gb': round(total, 1),
+                   'pct': int(stat.dwMemoryLoad)}
+    except Exception:  # noqa: BLE001
+        ram = None
+    try:
+        cpu = subprocess.run(['powershell', '-NoProfile', '-Command',
+                              "(Get-CimInstance Win32_Processor | "
+                              "Measure-Object -Property LoadPercentage -Average)"
+                              ".Average"],
+                             capture_output=True, text=True, timeout=15).stdout
+        load = float(cpu.strip()) if cpu.strip() else None
+    except Exception:  # noqa: BLE001
+        load = None
+    return {'cpu_pct': load, 'ram': ram}
+
+
+def _endpoint_procs():
+    """Slow part of endpoints_state(): process table + per-PID VRAM.
+
+    Two subprocesses (~2s). Cached separately from the health probe so the
+    live/down indicator can refresh often without re-paying for this.
+    """
+    procs = {}
+    try:
+        ps = ("Get-CimInstance Win32_Process -Filter \"Name='llama-server.exe'\""
+              " | Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress")
+        raw = subprocess.run(['powershell', '-NoProfile', '-Command', ps],
+                             capture_output=True, text=True, timeout=20).stdout
+        items = json.loads(raw or '[]')
+        if isinstance(items, dict):
+            items = [items]
+        for p in items:
+            cmd = p.get('CommandLine') or ''
+
+            def flag(name):
+                m = re.search(r'%s\s+("[^"]+"|\S+)' % re.escape(name), cmd)
+                return m.group(1).strip('"') if m else None
+            gguf = re.search(r'([A-Za-z]:\\[^"]*?\.gguf)', cmd) \
+                or re.search(r'(\S+\.gguf)', cmd)
+            procs[flag('--port') or str(p.get('ProcessId'))] = {
+                'pid': p.get('ProcessId'), 'alias': flag('--alias'),
+                'device': flag('--device') or flag('-dev'),
+                'ctx': flag('-c') or flag('--ctx-size'),
+                'model': os.path.basename(gguf.group(1)) if gguf else None}
+    except Exception:  # noqa: BLE001 — the panel must not break the page
+        pass
+    vram = {}
+    try:
+        out = subprocess.run(['nvidia-smi', '--query-compute-apps=pid,used_memory',
+                              '--format=csv,noheader,nounits'],
+                             capture_output=True, text=True, timeout=10).stdout
+        for line in out.strip().splitlines():
+            pid, mb = [x.strip() for x in line.split(',')]
+            vram[pid] = float(mb)
+    except Exception:  # noqa: BLE001
+        pass
+    return procs, vram
+
+
+def _probe_port(port, timeout=0.25):
+    """Is something listening on this port?
+
+    A raw TCP connect, not an HTTP request: the expensive part of the old version
+    (3x urlopen = 4s per snapshot) was HTTP to endpoints that are mid-training or
+    down. Everything the panel *shows* comes from the process command line, which
+    is already read once and cached; this only answers "is it up right now".
+    """
+    import socket
+    try:
+        with socket.create_connection(('127.0.0.1', port), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
+def endpoints_state():
+    """Every llama-server endpoint: alias, GPU, model file, VRAM, liveness.
+
+    The dashboard used to show only the teacher. The pipeline now runs three
+    endpoints at once (teacher + two students), and after an iteration the
+    question that matters is *which weights the students are serving* — so this
+    reads each server's own command line rather than guessing.
+    """
+    procs, vram = _cached('endpoint_procs', 30, _endpoint_procs)
+    out = []
+    for port in (8080, 8082, 8083):
+        info = procs.get(str(port), {})
+        out.append({
+            'port': port, 'label': ('teacher' if port == 8080
+                                    else 'student %s' % ('A' if port == 8082
+                                                         else 'B')),
+            'alias': info.get('alias'), 'device': info.get('device'),
+            'ctx': info.get('ctx'), 'model': info.get('model'),
+            'pid': info.get('pid'),
+            'vram_mib': vram.get(str(info.get('pid'))) if info.get('pid') else None,
+            'up': _probe_port(port)})
+    return out
+
+
+def _flatten_steps(steps):
+    """One level of nesting flattened: {'serve': {'a': {'ok': True}}} -> serve.a.
+
+    Without this the serve step (which reports per student) counted as a single
+    unnamed entry and a failed student was invisible in the panel.
+    """
+    out = {}
+    for key, val in (steps or {}).items():
+        if key == 'review':
+            continue
+        if isinstance(val, dict):
+            if 'ok' in val:
+                out[key] = val.get('ok')
+            else:
+                for sub, sv in val.items():
+                    if isinstance(sv, dict) and 'ok' in sv:
+                        out['%s.%s' % (key, sub)] = sv.get('ok')
+                    elif isinstance(sv, bool):
+                        out['%s.%s' % (key, sub)] = sv
+        else:
+            out[key] = val
+    return out
+
+
+def loop_state():
+    """The recursive loop's own record: iterations, gates, and what it queued."""
+    files = sorted(glob.glob(os.path.join(ROOT, 'logs', 'loop-*.json')),
+                   key=os.path.getmtime)
+    if not files:
+        return {'file': None, 'iterations': []}
+    path = files[-1]
+    try:
+        with open(path, encoding='utf-8') as fh:
+            state = json.load(fh)
+    except (OSError, ValueError):
+        return {'file': os.path.basename(path), 'iterations': []}
+    iters = []
+    for it in state.get('iterations', []):
+        gate = it.get('gate') or {}
+        reviews = ((it.get('steps') or {}).get('review') or {})
+        iters.append({
+            'iteration': it.get('iteration'), 'status': it.get('status'),
+            'corpus': it.get('corpus'), 'started': it.get('started_utc'),
+            'mean_pass_rate': it.get('mean_pass_rate'),
+            'reviews': {k: {'pass_rate': v.get('pass_rate'),
+                            'scored': v.get('scored')}
+                        for k, v in reviews.items()
+                        if isinstance(v, dict)},
+            'steps': _flatten_steps(it.get('steps')),
+            'gate': {'passed': gate.get('passed'),
+                     'floor': gate.get('floor'),
+                     'clears_floor': gate.get('clears_floor'),
+                     'no_regression': gate.get('no_regression')}})
+    return {'file': os.path.basename(path), 'iterations': iters}
 
 
 def teacher_state():
@@ -360,6 +575,7 @@ def hf_state():
             'gate': e.get('gate'), 'revision': (e.get('revision') or '')[:8]})
     st = hf.storage()
     return {'datasets': items, 'queue': hf.queue_summary(data),
+            'items': hf.queue_items(data),
             'jobs': hf.jobs()[:12],
             'storage': {'root': st['root'], 'total_human': st['total_human'],
                         'free_human': st['free_human'],
@@ -370,10 +586,13 @@ def snapshot():
     return {'updated_utc': datetime.now(timezone.utc).isoformat(timespec='seconds'),
             'phases': [{'n': n, 'name': name, 'status': s, 'doc': d} for n, name, s, d in PHASES],
             'gpus': gpu_state(),
-            'teacher': teacher_state(),
-            'datasets': dataset_inventory(),
+            'host': _cached('host', 10, host_state),
+            'teacher': _cached('teacher', 5, teacher_state),
+            'endpoints': _cached('endpoints', 6, endpoints_state),
+            'loop': loop_state(),
+            'datasets': _cached('inventory', 15, dataset_inventory),
             'training': training_status(),
             'corpus': corpus_state(),
-            'hfd': hf_state(),
+            'hfd': _cached('hfd', 8, hf_state),
             'export': export_state(),
             'control': control_state()}

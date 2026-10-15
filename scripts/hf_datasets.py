@@ -868,6 +868,38 @@ def pid_alive(pid):
         return False
 
 
+def live_pids():
+    """Every running PID in ONE tasklist call (jobs() used to shell out per job)."""
+    pids = set()
+    try:
+        out = subprocess.run(["tasklist", "/NH", "/FO", "CSV"],
+                             capture_output=True, text=True, timeout=60).stdout
+        for line in out.splitlines():
+            parts = [p.strip('"') for p in line.split('","')]
+            if len(parts) > 1 and parts[1].isdigit():
+                pids.add(parts[1])
+    except Exception:  # noqa: BLE001
+        pass
+    return pids
+
+
+def jobs():
+    """Recorded jobs, each with liveness and a log tail (dashboard feed)."""
+    out = []
+    alive = live_pids()
+    for j in reversed(_load_jobs()):
+        path = os.path.join(ROOT, j.get("log") or "")
+        tail = ""
+        try:
+            with open(path, encoding="utf-8", errors="replace") as fh:
+                tail = "\n".join(fh.read().splitlines()[-4:])
+        except OSError:
+            pass
+        running = (str(j.get("pid")) in alive) if alive else pid_alive(j.get("pid"))
+        out.append(dict(j, running=running, tail=tail[-400:]))
+    return out
+
+
 def spawn(action, repo=None, **kw):
     """Launch one pipeline action as a detached job (what the dashboard calls).
 
@@ -910,22 +942,6 @@ def spawn(action, repo=None, **kw):
     return job
 
 
-def jobs():
-    """Recorded jobs, each with liveness and a log tail (dashboard feed)."""
-    out = []
-    for j in reversed(_load_jobs()):
-        path = os.path.join(ROOT, j.get("log") or "")
-        tail = ""
-        try:
-            with open(path, encoding="utf-8", errors="replace") as fh:
-                tail = "\n".join(fh.read().splitlines()[-4:])
-        except OSError:
-            pass
-        out.append(dict(j, running=pid_alive(j.get("pid")),
-                        tail=tail[-400:]))
-    return out
-
-
 def wait_for_pid(pid, poll=30, log=print):
     """Block until a detached child exits (a loop iteration runs for hours)."""
     while True:
@@ -954,10 +970,126 @@ def next_iteration(tag):
 
 
 def queue_pending(data=None):
-    """Datasets still to process, in add order (the 'next dataset' queue)."""
+    """Datasets still to process, in queue order (skipped/excluded ones omitted)."""
     data = data or load_registry()
-    done = {"learned_verified", "dropped", "error", "not_trainable"}
-    return [e for e in data["datasets"] if e.get("state") not in done]
+    return [e for e in data["datasets"]
+            if (e.get("state") or "") not in DONE_STATES]
+
+
+IN_FLIGHT_STATES = {"pulling", "converting", "verifying", "fitting", "rewriting",
+                    "training"}
+DONE_STATES = {"learned_verified", "dropped", "error", "not_trainable", "skipped"}
+
+# What the queue will do with an item that is in a given state.
+NEXT_STEP = {
+    "added": "pull", "pulled": "convert", "converted": "verify",
+    "verified": "fit", "fitted": "train", "training": "review + gate",
+    "skipped": "(skipped — files kept)", "learned_verified": "delete local copy",
+    "dropped": "(released)", "not_trainable": "(excluded — see audit)",
+    "error": "(failed — see history)", "rewriting": "teacher rewrite",
+    "removed": "(removed from queue)",
+}
+
+
+def active_repo():
+    """The dataset the pipeline is working on right now, if any.
+
+    Used to lock the queue: reordering or skipping the item that is mid-pull or
+    mid-training would desynchronise the runner from what is actually running.
+    """
+    for j in jobs():
+        if j.get("running") and j.get("repo"):
+            return j["repo"]
+    for e in load_registry()["datasets"]:
+        if (e.get("state") or "") in IN_FLIGHT_STATES:
+            return e["id"]
+    return None
+
+
+def queue_items(data=None):
+    """The ordered queue with, per item, what happens next and whether it is locked."""
+    data = data or load_registry()
+    act = active_repo()
+    out = []
+    for pos, e in enumerate(data["datasets"]):
+        st = e.get("state") or "unknown"
+        out.append({
+            "pos": pos, "id": e["id"], "state": st,
+            "pending": st not in DONE_STATES,
+            "rows": e.get("rows"), "fitted_rows": e.get("fitted_rows"),
+            "bytes_human": human(e.get("bytes") or 0),
+            "next_step": NEXT_STEP.get(st, "?"),
+            "active": act == e["id"],
+            "locked": (act == e["id"]) or st in IN_FLIGHT_STATES,
+            "tag": e.get("tag"), "note": e.get("note")})
+    return out
+
+
+def _locked(repo, data):
+    e = entry_of(data, repo)
+    if e is None:
+        raise SystemExit("unknown dataset %s" % repo)
+    st = e.get("state") or ""
+    if active_repo() == repo or st in IN_FLIGHT_STATES:
+        raise SystemExit(
+            "refusing to change %s: the pipeline is working on it right now "
+            "(state=%s). Wait for the step to finish." % (repo, st))
+    return e
+
+
+def queue_move(repo, direction, data=None):
+    """Swap an item with the next/previous PENDING item. Refuses when locked."""
+    data = data or load_registry()
+    _locked(repo, data)
+    items = list(data["datasets"])
+    target = entry_of(data, repo)
+    idx = items.index(target)
+    step = -1 if direction == "up" else 1
+    j = idx + step
+    while 0 <= j < len(items):
+        other = items[j]
+        if (other.get("state") or "") not in DONE_STATES:
+            items[idx], items[j] = items[j], items[idx]
+            data["datasets"] = items
+            save_registry(data)
+            return {"ok": True, "moved": repo, "direction": direction,
+                    "swapped_with": other["id"]}
+        j += step
+    return {"ok": True, "moved": None,
+            "note": "%s is already at the %s end of the queue" % (repo, direction)}
+
+
+def queue_skip(repo, skip=True, data=None):
+    """Take an item out of the queue (or put it back) WITHOUT touching its files.
+
+    Distinct from `drop`: skipping keeps the local copy and its provenance, it
+    just stops the runner from working on it.
+    """
+    data = data or load_registry()
+    e = _locked(repo, data)
+    st = e.get("state") or ""
+    if skip:
+        if st == "skipped":
+            return {"ok": True, "note": "already skipped"}
+        e["skipped_from"] = st
+        e["state"] = "skipped"
+        upsert(data, repo, note="skipped by operator (was %s) — files kept" % st)
+    else:
+        back = e.pop("skipped_from", None) or "added"
+        e["state"] = back
+        upsert(data, repo, note="unskipped -> %s" % back)
+    save_registry(data)
+    return {"ok": True, "id": repo, "state": e["state"]}
+
+
+def queue_add(ref, data=None):
+    """Append a dataset to the queue (registers it; pull/convert follow)."""
+    repo = resolve_repo(ref)
+    data = data or load_registry()
+    e = upsert(data, repo, note="added to the queue")
+    save_registry(data)
+    return {"ok": True, "id": repo, "state": e.get("state"),
+            "position": len(data["datasets"]) - 1}
 
 
 def queue_summary(data=None):
@@ -968,7 +1100,9 @@ def queue_summary(data=None):
         out[e.get("state") or "unknown"] = out.get(e.get("state") or "unknown", 0) + 1
     pend = queue_pending(data)
     return {"by_state": out, "pending": len(pend),
-            "next": pend[0]["id"] if pend else None}
+            "next": pend[0]["id"] if pend else None,
+            "active": active_repo()}
+
 
 
 

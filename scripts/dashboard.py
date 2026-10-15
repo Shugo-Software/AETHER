@@ -241,6 +241,70 @@ def _corpus_panel(snap):
     return h
 
 
+def _queue_panel(snap):
+    """The dataset queue as its own section: order, next step, and controls.
+
+    Reorder/skip is refused for whatever the pipeline is working on *right now*
+    (the row says so rather than silently ignoring the click), and none of these
+    controls touch the local files — deletion stays gated on a passed iteration.
+    """
+    d = snap.get('hfd') or {}
+    items = d.get('items') or []
+    q = d.get('queue') or {}
+    h = ['<h2>Dataset queue</h2>', '<div class="card">']
+    act = q.get('active')
+    h.append('<div class="small">%d pending%s &middot; queue order is the order '
+             'they are trained in &middot; skipping keeps files, deleting is gated '
+             'on a passed iteration</div>'
+             % (q.get('pending', 0),
+                (' &middot; <b>working on %s</b>' % html.escape(str(act)))
+                if act else ''))
+    h.append('<div class="ctl" style="margin-top:8px">')
+    h.append('<label>add to queue<input id="queue-add" size="40" '
+             'placeholder="https://huggingface.co/datasets/org/name"></label>')
+    h.append('<button class="act start" id="queue-add-btn">Add</button>')
+    h.append('</div><div id="queue-status"></div>')
+    h.append('</div>')
+
+    if not items:
+        h.append('<div class="card">queue is empty &mdash; add a dataset above or '
+                 'use the panel further down to link one</div>')
+        return h
+    h.append('<table><tr><th>#</th><th>Dataset</th><th>State</th>'
+             '<th>Next</th><th>Rows</th><th>On disk</th><th>Move / skip</th></tr>')
+    for it in items:
+        locked = it.get('locked')
+        tone = ('ok' if it.get('state') in ('learned_verified', 'dropped')
+                else 'bad' if it.get('state') in ('error', 'not_trainable')
+                else 'run' if it.get('active') else 'warn')
+        pills = ['<span class="pill %s">%s</span>'
+                 % (tone, html.escape(str(it.get('state'))))]
+        if it.get('active'):
+            pills.append('<span class="pill run">active</span>')
+        elif not it.get('pending'):
+            pills.append('<span class="pill">done</span>')
+        dis = ' disabled' if locked else ''
+        tip = (' title="locked: the pipeline is working on this dataset"'
+               if locked else '')
+        h.append('<tr><td>%s</td><td class="small">%s</td><td>%s</td>'
+                 '<td class="small">%s</td><td>%s</td><td>%s</td><td>' % (
+                     it.get('pos'), html.escape(str(it.get('id'))),
+                     ' '.join(pills), html.escape(str(it.get('next_step'))),
+                     it.get('fitted_rows') or it.get('rows') or '-',
+                     html.escape(str(it.get('bytes_human')))))
+        h.append('<button class="hfrow" data-qact="up" data-repo="%s"%s%s>&#9650;</button>'
+                 % (html.escape(str(it.get('id'))), dis, tip))
+        h.append('<button class="hfrow" data-qact="down" data-repo="%s"%s%s>&#9660;</button>'
+                 % (html.escape(str(it.get('id'))), dis, tip))
+        skip_label = 'unskip' if it.get('state') == 'skipped' else 'skip'
+        skip_act = 'unskip' if it.get('state') == 'skipped' else 'skip'
+        h.append('<button class="hfrow" data-qact="%s" data-repo="%s"%s%s>%s</button>'
+                 % (skip_act, html.escape(str(it.get('id'))), dis, tip, skip_label))
+        h.append('</td></tr>')
+    h.append('</table>')
+    return h
+
+
 def _hf_panel(snap):
     """Link / pull / prepare / train / release, with disk and queue state."""
     d = snap.get('hfd') or {}
@@ -391,6 +455,9 @@ def render(snap):
     h.append('<div id="ctl-status">idle — pick a dataset and press Start</div>')
     h.append("</div>")
 
+    # Dataset queue (its own section: order, next step, reorder/skip)
+    h.extend(_queue_panel(snap))
+
     # What the model is learning (label masking + corpus health)
     h.extend(_corpus_panel(snap))
 
@@ -441,29 +508,104 @@ def render(snap):
     g = snap["gpus"]
     if g and "error" not in g[0]:
         h.append('<table><tr><th>#</th><th>GPU</th><th>Util</th>'
-                 "<th>VRAM</th><th></th></tr>")
+                 "<th>VRAM</th><th>Temp</th><th>Power</th><th></th></tr>")
         h.append('<tbody id="gpu-body">')
         for gpu in g:
+            temp = gpu.get("temp")
+            temp_cls = ("bad" if isinstance(temp, (int, float)) and temp >= 80
+                        else "warn" if isinstance(temp, (int, float)) and temp >= 70
+                        else "")
             h.append('<tr data-idx="%s"><td>%s</td><td>%s</td>'
-                     '<td class="u">%.0f%%</td><td class="v">%.0f/%.0f MiB</td>' % (
+                     '<td class="u">%.0f%%</td><td class="v">%.0f/%.0f MiB</td>'
+                     '<td class="t %s">%s</td><td class="w">%s</td>' % (
                          gpu["index"], gpu["index"], html.escape(gpu["name"]),
-                         gpu["util"], gpu["used"], gpu["total"]))
+                         gpu["util"], gpu["used"], gpu["total"], temp_cls,
+                         ("%.0f&deg;C" % temp) if isinstance(temp, (int, float))
+                         else "-",
+                         ("%.0f W" % gpu["power"])
+                         if isinstance(gpu.get("power"), (int, float)) else "-"))
             h.append('<td><div class="bar"><div class="p" style="width:%.1f%%">'
                      "</div></div></td></tr>" % gpu["pct"])
         h.append("</tbody></table>")
+        hs = snap.get("host") or {}
+        bits = []
+        if isinstance(hs.get("cpu_pct"), (int, float)):
+            bits.append("CPU %d%%" % round(hs["cpu_pct"]))
+        ram = hs.get("ram")
+        if ram:
+            bits.append("RAM %s / %s GB (%s%%)"
+                        % (ram.get("used_gb"), ram.get("total_gb"), ram.get("pct")))
+        if bits:
+            h.append('<div class="small">%s</div>'
+                     % html.escape(" \u00b7 ".join(bits)))
     else:
         h.append('<div class="card bad">nvidia-smi unavailable</div>')
 
-    # Teacher endpoint
-    h.append("<h2>Teacher endpoint (:8080)</h2>")
-    t2 = snap["teacher"]
-    if t2.get("up"):
-        h.append('<div class="card ok">UP health %s, serving %s</div>' % (
-            html.escape(t2["health"]),
-            html.escape(", ".join(t2["models"]))))
+    # Every llama-server endpoint (teacher + both students)
+    h.append("<h2>Model endpoints (live)</h2>")
+    eps = snap.get("endpoints") or []
+    if eps:
+        h.append('<table><tr><th>Role</th><th>Port</th><th>Alias</th>'
+                 '<th>GPU</th><th>Model file</th><th>VRAM</th><th>ctx</th>'
+                 "<th>State</th></tr>")
+        for e in eps:
+            vram = e.get("vram_mib")
+            h.append('<tr><td>%s</td><td>%s</td><td>%s</td><td>%s</td>'
+                     '<td class="small">%s</td><td>%s</td><td>%s</td>'
+                     '<td>%s</td></tr>' % (
+                         html.escape(str(e.get("label"))), e.get("port"),
+                         html.escape(str(e.get("alias") or "-")),
+                         html.escape(str(e.get("device") or "-")),
+                         html.escape(str(e.get("model") or "-")),
+                         ("%.0f MiB" % vram) if isinstance(vram, (int, float))
+                         else "-",
+                         html.escape(str(e.get("ctx") or "-")),
+                         '<span class="pill ok">up</span>' if e.get("up")
+                         else '<span class="pill bad">down</span>'))
+        h.append("</table>")
+        h.append('<div class="small">Students serve the newest export; the model '
+                 'file column is read from each server\'s own command line, so a '
+                 'stale endpoint is visible rather than assumed.</div>')
     else:
-        h.append('<div class="card bad">DOWN %s</div>'
-                 % html.escape(str(t2.get("error"))))
+        h.append('<div class="card">no llama-server endpoints detected</div>')
+
+    # Recursive loop: iterations and their gate decisions
+    lp = snap.get("loop") or {}
+    if lp.get("iterations"):
+        h.append("<h2>Recursive loop (iterations + gate)</h2>")
+        h.append('<table><tr><th>It</th><th>Corpus</th><th>Steps</th>'
+                 "<th>Gate</th><th>Status</th></tr>")
+        for it in lp["iterations"]:
+            steps = it.get("steps") or {}
+            failed = [k for k, v in steps.items() if v is False]
+            gate = it.get("gate") or {}
+            gp = gate.get("passed")
+            rate = it.get("mean_pass_rate")
+            per = ", ".join("%s %s" % (k, (("%.0f%%" % (100 * v["pass_rate"]))
+                                           if isinstance(v.get("pass_rate"),
+                                                         (int, float)) else "-"))
+                            for k, v in (it.get("reviews") or {}).items())
+            h.append('<tr><td>%s</td><td class="small">%s</td>'
+                     '<td class="small">%s</td><td>%s</td><td>%s</td></tr>' % (
+                         it.get("iteration"),
+                         html.escape(str(it.get("corpus") or "-")),
+                         html.escape("%d ok%s" % (sum(1 for v in steps.values()
+                                                       if v is not False),
+                                                  (" / failed: " + ", ".join(failed))
+                                                  if failed else "")),
+                         ('<span class="pill ok">pass %s</span>'
+                          % (("%.0f%%" % (100 * rate)) if isinstance(rate, (int, float))
+                             else "?")) if gp
+                         else ('<span class="pill bad">fail %s (floor %s)</span>'
+                               % ((("%.0f%%" % (100 * rate))
+                                   if isinstance(rate, (int, float)) else "?"),
+                                  gate.get("floor")))
+                         if gp is False else '<span class="pill">not reached</span>',
+                         html.escape(str(it.get("status") or "-")
+                                     + (" \u00b7 " + per if per else ""))))
+        h.append("</table>")
+        h.append('<div class="small">from %s — the gate grades behaviour via the '
+                 'teacher judge, not loss.</div>' % html.escape(str(lp.get("file"))))
 
     # Datasets
     h.append("<h2>Datasets</h2>")
@@ -599,6 +741,10 @@ function updateGpus(gpus){
     var u=row.querySelector('.u'),v=row.querySelector('.v'),p=row.querySelector('.p');
     if(u)u.textContent=Math.round(gpu.util)+'%';
     if(v)v.textContent=Math.round(gpu.used)+'/'+Math.round(gpu.total)+' MiB';
+    var t=row.querySelector('.t'),w=row.querySelector('.w');
+    if(t&&gpu.temp!=null){t.textContent=Math.round(gpu.temp)+'\\u00b0C';
+      t.className='t '+(gpu.temp>=80?'bad':(gpu.temp>=70?'warn':''));}
+    if(w&&gpu.power!=null)w.textContent=Math.round(gpu.power)+' W';
     if(p)p.style.width=gpu.pct+'%';}
 }
 function buildGens(samples){
@@ -731,6 +877,21 @@ function hfRun(action,repo){
     poll();
   }).catch(function(e){if(el)el.innerHTML='<span class="bad">request failed: '+e+'</span>';});
 }
+function hfQueue(action,repo){
+  var el=document.getElementById('queue-status');
+  var box=document.getElementById('queue-add');
+  var body={action:action,repo:repo||''};
+  if(action==='add'){body.repo=box?box.value.trim():'';
+    if(!body.repo){if(el)el.innerHTML='<span class="bad">give a dataset url or id</span>';return;}}
+  if(!el)return;
+  el.innerHTML='<span class="ok">'+action+'…</span>';
+  fetch('/api/hf/queue',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify(body)}).then(function(r){return r.json();}).then(function(o){
+    el.innerHTML=o.ok?('<span class="ok">'+action+' ok'+(o.note?(' \\u2014 '+o.note):'')+'</span>')
+                     :('<span class="bad">'+(o.error||'failed')+'</span>');
+    poll();
+  }).catch(function(e){el.innerHTML='<span class="bad">request failed: '+e+'</span>';});
+}
 function applyCorpus(c){
   if(!c)return; var box=document.getElementById('corpus-findings'); if(!box)return;
   var out='';
@@ -761,7 +922,11 @@ document.addEventListener('DOMContentLoaded',function(){
   var ht=document.getElementById('hf-train'); if(ht)ht.addEventListener('click',function(){hfRun('train');});
   var hq=document.getElementById('hf-queue'); if(hq)hq.addEventListener('click',function(){hfRun('queue_run');});
   document.addEventListener('click',function(e){var b=e.target;
-    if(b&&b.classList&&b.classList.contains('hfrow')){hfRun(b.dataset.act,b.dataset.repo);}});
+    if(!b||!b.classList||!b.classList.contains('hfrow'))return;
+    if(b.dataset.qact){hfQueue(b.dataset.qact,b.dataset.repo);}
+    else if(b.dataset.act){hfRun(b.dataset.act,b.dataset.repo);}});
+  var qa=document.getElementById('queue-add-btn');
+  if(qa)qa.addEventListener('click',function(){hfQueue('add');});
   poll(); setInterval(poll,5000);
 });
 </script>
@@ -850,6 +1015,44 @@ class Handler(BaseHTTPRequestHandler):
             with _CTL_LOCK:
                 ok, payload = ec.stop_export()
             self._json(200 if ok else 409, dict(payload, ok=ok))
+        elif self.path == "/api/hf/queue":
+            # Queue editing: reorder / skip / add. The pipeline refuses changes to
+            # whatever it is working on right now, so the UI can offer the
+            # controls without risking a desynchronised runner.
+            import hf_datasets as hf
+            length = int(self.headers.get("Content-Length", 0) or 0)
+            raw = self.rfile.read(length) if length else b"{}"
+            try:
+                cfg = json.loads(raw or b"{}")
+            except ValueError:
+                self._json(400, {"ok": False, "error": "invalid JSON body"})
+                return
+            action = str(cfg.get("action") or "")
+            repo = cfg.get("repo") or None
+            with _CTL_LOCK:
+                try:
+                    if action == "add":
+                        if not repo:
+                            raise SystemExit("give a dataset url or id")
+                        out = hf.queue_add(repo)
+                    elif action in ("up", "down"):
+                        out = hf.queue_move(repo, action)
+                    elif action == "skip":
+                        out = hf.queue_skip(repo, True)
+                    elif action == "unskip":
+                        out = hf.queue_skip(repo, False)
+                    else:
+                        raise SystemExit("unknown queue action %r" % action)
+                except (SystemExit, Exception) as e:
+                    # SystemExit matters here: the pipeline raises it for validation
+                    # refusals (including the queue lock), and it is NOT an
+                    # Exception — catching only Exception let it escape the handler
+                    # and drop the connection instead of answering with 409.
+                    msg = e.code if isinstance(e, SystemExit) and e.code else str(e)
+                    self._json(409, {"ok": False, "error": str(msg)})
+                    return
+            self._json(200, dict(out, items=hf.queue_items(),
+                                 summary=hf.queue_summary()))
         elif self.path == "/api/hf/run":
             # Dataset pipeline (pull to G:, convert, verify, fit, train, drop).
             # Every action runs the same script the CLI runs, detached, so a
