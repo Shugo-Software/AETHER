@@ -53,6 +53,25 @@
 > (`base_model: LiquidAI/LFM2.5-2.6B`, LFM Open License v1.0) because the license
 > requires attribution — brand name and lineage tag are different things.
 
+## Hard-won constraints (2026-10-15) — pushing to GitHub hangs on this rig
+
+`git push` stalls indefinitely (reads/fetches are fine). Trace
+(`GIT_TRACE=1 GIT_CURL_VERBOSE=1`) shows git invoking
+`git-credential-manager get`, which blocks in a non-interactive shell — the
+**system** gitconfig (`C:\Program Files\Git\etc\gitconfig`) registers
+`credential.helper = manager` *in addition to* the user's `store` helper, and
+GCM is tried first. The stored credentials themselves are valid (verified
+against the API: both entries have `push: true`).
+
+Fix — reset the accumulated helper chain for the invocation:
+
+```powershell
+git -c credential.helper= -c credential.helper=store push origin main
+```
+
+Use that form for every push from this machine (and from any non-interactive
+process). Symptom to recognise: `git ls-remote` works, `git push` never returns.
+
 ## Hard-won constraints (2026-10-15) — Vulkan on the 3 GB card can take the box down
 
 `llama-cli` **Vulkan** on the GTX 1060 3 GB with `q5_k_s` died with
