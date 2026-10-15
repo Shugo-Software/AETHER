@@ -110,7 +110,46 @@ because it is the correct target shape for any future dataset with real
 reasoning. Generalisation: for a 2.6B QLoRA on a few dozen rows, prompt/template
 shape dominates; do not expect a single structural token to be learned.
 
-## Smoke test (tag `smoke8`, 2026-10-14)
+## The loss was never masked — fixed 2026-10-15 (changed every number before it)
+
+`DataCollatorForLanguageModeling(tok, mlm=False)` masks **padding only**. So every
+run through Jadis 1.0 and loop iteration 1 computed loss over the *whole* rendered
+row: system prompt, user turn, code, and answer. Measured on `phase6_pro1.jsonl`
+with `scripts/verify_dataset.py`, answers are only **35.8%** of the kept tokens —
+i.e. ~64% of the gradient was spent learning to reproduce the input. That is
+continued pretraining wearing an SFT costume.
+
+It is worse than dilution. 67 of 500 rows had prompts longer than `--max-len`, so
+their answer was truncated away entirely: **100% of their gradient was prompt**,
+which trains the model to *continue StarCoder files* mid-document. The gradient
+was not merely diluted, part of it pointed the wrong way.
+
+What changed (`scripts/train_student.py`):
+
+- `--prompt-loss {masked,full}`, **default `masked`**: labels are set to `-100`
+  across the prompt head (`format_head`, now the single source of truth for the
+  prompt/answer boundary), so only answer tokens carry gradient.
+- `CompletionCollator` pads `input_ids`/`attention_mask` and pads labels with
+  `-100` explicitly. Letting a generic collator pad labels with `pad_token_id`
+  would train the model to emit padding.
+- Rows left with **no** unmasked token are dropped and counted
+  (`dropped_no_answer`). A masked row with zero labels has no valid loss at all
+  and `CrossEntropyLoss` means over an empty set → **NaN**, which would silently
+  destroy the run. `MetricsCallback` now also warns on any non-finite loss.
+- Two new diagnostic lines print what the run will actually train on:
+  `[train] labels: prompt_loss=masked rows_used=330/330 dropped_no_answer=0
+  answer_token_share=0.3581`.
+
+**Loss values are not comparable across this change** (different token sets) and
+not comparable across corpora. Before: 2.41 at step 2 of 96 on 500 rows. After:
+1.29 at step 2 of 64 on the fitted 330-row corpus. The gate compares *behaviour*
+via the teacher judge, not loss, for exactly this reason.
+
+Masking makes a precondition mandatory: the corpus must be fitted to the budget
+(`scripts/fit_corpus.py`), because a row whose prompt exceeds `--max-len` now has
+nothing left to learn from. See `docs/dataset-generation.md`.
+
+
 
 5 steps, max-len 256, on the 1060 6GB: **loss 3.864**, ~20 s/step, adapter saved
 (`adapters/lfm25-smoke8/adapter_model.safetensors`, 4.6 MB). First step showed

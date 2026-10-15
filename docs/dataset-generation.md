@@ -95,3 +95,58 @@ grounded in supplied code, and already proven to shape the student — see
 - Datasets under `datasets/eval/` are unreachable from the training control
   plane by construction: datasets launch by bare filename from `datasets/`, so
   `eval/openai-math.jsonl` cannot be selected (dashboard or API).
+
+## Verifying and fitting a corpus before training (2026-10-15)
+
+Asking "is this corpus good?" is the wrong question; ask **"what does the trainer
+actually feed the model?"** Two tools answer that, and both import the trainer's
+own renderer (`train_student.format_record` / `format_head`) so they cannot drift
+from training:
+
+- `scripts/verify_dataset.py --jsonl … --max-len 1536 [--overlap …]` — read-only.
+  Reports composition, token lengths, and a per-row truncation class:
+  **complete** / **partial** (answer partly cut) / **answer_cut** (answer gone),
+  whether `<|im_end|>` survives, the share of loss-relevant tokens that are
+  answers, duplicate prompts, and prompt overlap with another file (leakage).
+  Exits non-zero if any row loses its answer.
+- `scripts/fit_corpus.py --in … --out … --max-len 1536 --holdout …` — rewrites a
+  corpus so every row is learnable: drops anchor-overlapping prompts, trims
+  answers back to the last natural boundary (paragraph → line → sentence → word)
+  that still fits, drops rows whose prompt alone exceeds the budget, and caps
+  duplicates per prompt. Writes `<out>.filter.json` provenance (input sha256,
+  policy, per-reason counts).
+
+Measured on `phase6_pro1.jsonl` (500 rows, the first corpus built for the loop):
+
+| | before fit | after fit (`phase6_pro1-fit.jsonl`) |
+|---|---|---|
+| rows | 500 | 330 |
+| complete / partial / **answer_cut** | 352 / 81 / **67** | 330 / 0 / **0** |
+| terminator `<|im_end|>` survives | 0 (verifier bug — see below) | 330 (100%) |
+| answer tokens kept | 72.5% | 100% |
+| unique prompts | 410 (one prompt repeated **x14**) | 330 (no duplicates) |
+| prompts also in the anchor | 11 (in 101 rows) | **0** |
+| answers as share of loss tokens | 35.8% | 35.8% (the fix is masking; see `student-training.md`) |
+
+Dropped: `prompt_too_long=67`, `anchor_holdout=101`, `answer_too_short_after_trim=2`.
+
+### The anchor set is also the seed source — a structural conflict
+
+`phase6_pilot1.jsonl` (60 prompts) is the anchor for every comparison, but the
+`seed_gen` recipe draws its seeds from that same list. So 101 rows of `pro1`
+carried anchor prompts: **you cannot both train on them and measure against
+them.** Options, in order of preference:
+
+1. hold them out (what `fit_corpus.py --holdout` does; the anchor stays a real
+   holdout, at the cost of the teacher-gen rows — which is what happened here:
+   the fitted corpus is 330 teacher-*answered* StarCoder rows),
+2. generate a **fresh** seed list for future corpora (Phase 6 change) so seeds
+   and anchor stop being the same 60 prompts,
+3. accept a contaminated anchor and stop calling it an anchor.
+
+Verifier bug found the same day: the terminator check compared only the *final*
+token, but a rendered row ends `…answer<|im_end|>\n`, so it reported 0/500 for
+corpora that were 100% correct. Fixed (`_has_subseq` searches a small trailing
+window). Lesson: a measurement tool needs the same suspicion as the thing it
+measures — an implausible 0% is a bug report, not a finding.
+

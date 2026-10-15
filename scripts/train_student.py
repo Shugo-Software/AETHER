@@ -36,6 +36,12 @@ def parse_args():
     ap.add_argument("--lr", type=float, default=2e-4)
     ap.add_argument("--max-steps", type=int, default=-1)
     ap.add_argument("--max-len", type=int, default=1024)
+    ap.add_argument("--prompt-loss", choices=["masked", "full"],
+                    default="masked",
+                    help="masked (default): labels are -100 over the prompt, so "
+                         "only answer tokens carry gradient = instruction "
+                         "tuning. full: legacy, the loss also covers the prompt "
+                         "(continued-pretraining style, ~3x diluted signal)")
     ap.add_argument("--lora-r", type=int, default=16)
     ap.add_argument("--lora-alpha", type=int, default=32)
     ap.add_argument("--batch", type=int, default=1,
@@ -58,6 +64,27 @@ def pick_dataset(explicit):
     return cands[-1]
 
 
+def format_head(rec, tok):
+    """The exact generation-prompt prefix of a rendered record.
+
+    Single source of truth for the prompt/answer boundary: `format_record`
+    builds the row on top of it, and completion-only label masking uses its
+    token length to decide which tokens may contribute to the loss. Returns
+    None when the chat template is unusable (caller falls back).
+    """
+    sys = rec.get("system") or "You are a helpful Python engineer."
+    tmpl = getattr(tok, "chat_template", None)
+    if tmpl:
+        try:
+            return tok.apply_chat_template(
+                [{"role": "system", "content": sys},
+                 {"role": "user", "content": rec["prompt"]}],
+                tokenize=False, add_generation_prompt=True)
+        except Exception:  # noqa: BLE001 — caller uses the plain fallback
+            return None
+    return None
+
+
 def format_record(rec, tok):
     """Render a record as the exact token stream the model meets at inference.
 
@@ -75,34 +102,106 @@ def format_record(rec, tok):
     prompt = rec["prompt"]
     comp = rec["completion"]
     reason = (rec.get("reasoning") or "").strip()
-    tmpl = getattr(tok, "chat_template", None)
-    if tmpl:
-        try:
-            head = tok.apply_chat_template(
-                [{"role": "system", "content": sys},
-                 {"role": "user", "content": prompt}],
-                tokenize=False, add_generation_prompt=True)
-            return head + (reason + "</think>\n" if reason else "</think>\n") \
-                + comp + "<|im_end|>\n"
-        except Exception:  # noqa: BLE001 — fall through to plain format
-            pass
+    head = format_head(rec, tok)
+    if head is not None:
+        return head + (reason + "</think>\n" if reason else "</think>\n") \
+            + comp + "<|im_end|>\n"
     return f"{sys}\n\nUser: {prompt}\n\nAssistant: {comp}"
 
 
-def build_hf_dataset(jsonl_path, tok, max_len):
+def load_rows(jsonl_path):
     rows = []
     with open(jsonl_path, encoding="utf-8") as fh:
         for line in fh:
             line = line.strip()
             if line:
                 rows.append(json.loads(line))
-    texts = [format_record(r, tok) for r in rows]
-    ds = Dataset.from_dict({"text": texts})
+    return rows
+
+
+def _mask_labels(ids, head_len):
+    """Labels for one row: -100 over the prompt, real ids over the answer."""
+    lab = list(ids)
+    for i in range(min(head_len, len(lab))):
+        lab[i] = -100
+    return lab
+
+
+def build_hf_dataset(jsonl_path, tok, max_len, mask_prompt=True):
+    """Render + tokenize into {input_ids, attention_mask[, labels]}.
+
+    With mask_prompt the prompt's labels are -100, so only answer tokens carry
+    gradient — this is what makes the run instruction tuning rather than
+    continued pretraining (unmasked, ~2/3 of the gradient goes to reproducing
+    the input, and a row whose answer was truncated away trains nothing but the
+    prompt). Such rows are dropped here: a row with no unmasked label has no
+    valid loss and would produce a NaN step. Returns (dataset, stats).
+    """
+    rows = load_rows(jsonl_path)
+    texts, heads = [], []
+    for r in rows:
+        texts.append(format_record(r, tok))
+        h = format_head(r, tok)
+        if h is None:
+            sys = r.get("system") or "You are a helpful Python engineer."
+            h = f"{sys}\n\nUser: {r['prompt']}\n\nAssistant: "
+        heads.append(h)
+    head_lens = [len(tok(h, add_special_tokens=False)["input_ids"])
+                 for h in heads]
+    ds = Dataset.from_dict({"text": texts, "head_len": head_lens})
 
     def tok_fn(batch):
-        return tok(batch["text"], truncation=True, max_length=max_len)
+        enc = tok(batch["text"], truncation=True, max_length=max_len)
+        if mask_prompt:
+            enc["labels"] = [_mask_labels(ids, hl) for ids, hl in
+                             zip(enc["input_ids"], batch["head_len"])]
+        return enc
 
-    return ds.map(tok_fn, batched=True, remove_columns=["text"]), len(rows)
+    tokenized = ds.map(tok_fn, batched=True,
+                       remove_columns=["text", "head_len"])
+    stats = {"rows_in": len(rows), "mask_prompt": bool(mask_prompt),
+             "dropped_no_answer": 0, "rows_used": len(tokenized)}
+    if mask_prompt:
+        keep = [i for i, lab in enumerate(tokenized["labels"])
+                if any(x != -100 for x in lab)]
+        stats["dropped_no_answer"] = len(tokenized) - len(keep)
+        tokenized = tokenized.select(keep)
+        stats["rows_used"] = len(tokenized)
+        total = sum(len(x) for x in tokenized["input_ids"])
+        answer = sum(sum(1 for t in lab if t != -100)
+                     for lab in tokenized["labels"])
+        stats["tokens_total"] = total
+        stats["tokens_answer"] = answer
+        stats["answer_share"] = round(1.0 * answer / total, 4) if total else None
+    return tokenized, stats
+
+
+class CompletionCollator:
+    """Pad input_ids/attention_mask, and pad labels with -100 (not pad_token_id).
+
+    Explicit on purpose: a generic collator padding labels with the pad token
+    would train the model to emit padding, and precomputed labels are the whole
+    point of completion-only masking.
+    """
+
+    def __init__(self, tok):
+        self.pad_id = tok.pad_token_id
+
+    def __call__(self, features):
+        width = max(len(f["input_ids"]) for f in features)
+        ids, mask, labs = [], [], []
+        for f in features:
+            n = width - len(f["input_ids"])
+            ids.append(list(f["input_ids"]) + [self.pad_id] * n)
+            am = f.get("attention_mask") or [1] * len(f["input_ids"])
+            mask.append(list(am) + [0] * n)
+            if "labels" in f:
+                labs.append(list(f["labels"]) + [-100] * n)
+        out = {"input_ids": torch.tensor(ids, dtype=torch.long),
+               "attention_mask": torch.tensor(mask, dtype=torch.long)}
+        if labs:
+            out["labels"] = torch.tensor(labs, dtype=torch.long)
+        return out
 
 
 def resolve_device(args):
@@ -209,6 +308,12 @@ class MetricsCallback(TrainerCallback):
                 continue
             # NaN/inf is invalid JSON and breaks the dashboard parser -> null.
             rec[k] = round(fv, 6) if math.isfinite(fv) else None
+        if rec.get("loss") is None and "loss" in logs:
+            # A non-finite loss silently ruins a run (e.g. a row with no
+            # unmasked label). Say so loudly instead of writing null and moving on.
+            import sys as _sys
+            print("[train] WARNING non-finite loss at step %s" % rec["step"],
+                  file=_sys.stderr, flush=True)
         with open(self.metrics_path, "a", encoding="utf-8") as fh:
             fh.write(json.dumps(rec) + "\n")
             fh.flush()
@@ -252,7 +357,9 @@ def main():
     model.print_trainable_parameters()
 
     state(status="preparing_data")
-    ds, n_rows = build_hf_dataset(ds_path, tok, args.max_len)
+    ds, dstats = build_hf_dataset(ds_path, tok, args.max_len,
+                                  mask_prompt=(args.prompt_loss == "masked"))
+    n_rows = dstats["rows_in"]
 
     from transformers import DataCollatorForLanguageModeling, Trainer, TrainingArguments
 
@@ -281,13 +388,19 @@ def main():
     open(metrics_path, "w").close()  # fresh per run
     trainer = Trainer(model=model, args=targs, train_dataset=ds,
                       processing_class=tok,
-                      data_collator=DataCollatorForLanguageModeling(
-                          tok, mlm=False),
+                      data_collator=(DataCollatorForLanguageModeling(tok, mlm=False)
+                                     if args.prompt_loss == "full"
+                                     else CompletionCollator(tok)),
                       callbacks=[MetricsCallback(metrics_path)])
-    state(status="training", rows=n_rows, epochs=args.epochs, lr=args.lr,
+    state(status="training", rows=n_rows, rows_used=dstats["rows_used"],
+          epochs=args.epochs, lr=args.lr,
           resumed_from=(os.path.relpath(resume_dir, ROOT) if resume_dir else None),
           config={"dataset": os.path.basename(ds_path), "student": STUDENT,
                   "epochs": args.epochs, "lr": args.lr, "max_len": args.max_len,
+                  "prompt_loss": args.prompt_loss,
+                  "rows_used": dstats["rows_used"],
+                  "dropped_no_answer": dstats["dropped_no_answer"],
+                  "answer_token_share": dstats.get("answer_share"),
                   "max_steps": args.max_steps, "batch": args.batch,
                   "grad_accum": args.grad_accum, "lora_r": args.lora_r,
                   "lora_alpha": args.lora_alpha, "optim": "paged_adamw_8bit",
@@ -304,11 +417,20 @@ def main():
         _spe = max(len(_dl) // max(args.grad_accum, 1), 1)
         print("[train] rows=%d dataset_rows=%d batch=%d grad_accum=%d "
               "dataloader_batches=%d steps_per_epoch=%d epochs=%s "
-              "=> total_steps=%d"
+              "=> total_steps=%d (max_steps=%s)"
               % (n_rows, len(ds), args.batch, args.grad_accum, len(_dl), _spe,
-                 args.epochs, _spe * int(_math.ceil(args.epochs))), flush=True)
+                 args.epochs, _spe * int(_math.ceil(args.epochs)),
+                 args.max_steps), flush=True)
     except Exception as e:  # noqa: BLE001 — never let diagnostics block training
         print("[train] dataloader diagnostic failed: %s" % e, flush=True)
+    print("[train] labels: prompt_loss=%s rows_used=%d/%d"
+          " dropped_no_answer=%d answer_token_share=%s"
+          % (args.prompt_loss, dstats["rows_used"], dstats["rows_in"],
+             dstats["dropped_no_answer"], dstats.get("answer_share")), flush=True)
+    if args.prompt_loss == "masked":
+        print("[train] only answer tokens carry gradient (%d of %s kept tokens)"
+              % (dstats.get("tokens_answer", 0), dstats.get("tokens_total")),
+              flush=True)
     result = trainer.train()
     state(status="saving", train_loss=round(float(result.training_loss), 4))
     trainer.save_model(out_dir)

@@ -24,8 +24,10 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import subprocess
 import sys
+import time
 from datetime import datetime, timezone
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -64,6 +66,11 @@ def parse_args():
                          "observed to disagree with rows/batch/accum.")
     ap.add_argument("--max-len", type=int, default=1024)
     ap.add_argument("--grad-accum", type=int, default=16)
+    ap.add_argument("--prompt-loss", choices=["masked", "full"],
+                    default="masked",
+                    help="passed straight to the trainer; masked = gradient on "
+                         "the answer only. Explicit here so a future default "
+                         "change cannot silently alter what the loop trains")
     ap.add_argument("--sample", type=int, default=40,
                     help="rows reviewed per student")
     ap.add_argument("--min-pass", type=float, default=0.60,
@@ -107,6 +114,21 @@ def run(cmd, log_name):
         pass
     print("[loop]   exit=%d  log=%s" % (proc.returncode, path), flush=True)
     return proc.returncode == 0, tail
+
+
+def fresh_adapter(path, since):
+    """True if `path` holds adapter weights written after `since`.
+
+    Guards the export step against a trainer that exited 0 without saving (or
+    saved somewhere else) leaving the previous iteration's adapter on disk.
+    """
+    if not os.path.isfile(os.path.join(path, "adapter_config.json")):
+        return False
+    try:
+        return max(os.path.getmtime(os.path.join(path, f))
+                   for f in os.listdir(path)) > since
+    except (OSError, ValueError):
+        return False
 
 
 def pass_rate(jsonl_path):
@@ -165,21 +187,40 @@ def main():
 
     # 1. train
     if not args.skip_train:
+        # A stale adapter from an earlier iteration must never be merged and
+        # shipped as this iteration's model — same reasoning as the quant
+        # artifacts below, and the failure is silent.
+        adapter_dir = os.path.join(ROOT, "adapters", args.tag)
+        if os.path.isdir(adapter_dir):
+            shutil.rmtree(adapter_dir, ignore_errors=True)
+            print("[loop]   cleared previous adapter %s"
+                  % os.path.relpath(adapter_dir, ROOT), flush=True)
+        t0 = time.time()
         ok, tail = run([PY, "-u", os.path.join(ROOT, "scripts", "train_student.py"),
                         "--dataset", args.corpus, "--tag", args.tag,
                         "--out", os.path.join("adapters", args.tag),
                         "--epochs", str(args.epochs),
                         "--max-len", str(args.max_len),
-                        "--grad-accum", str(args.grad_accum)]
+                        "--grad-accum", str(args.grad_accum),
+                        "--prompt-loss", args.prompt_loss]
                        + (["--max-steps", str(args.max_steps)]
                           if args.max_steps and args.max_steps > 0 else []),
                        "loop-%s-it%d-train.log" % (args.tag, args.iteration))
-        record["steps"]["train"] = {"ok": ok, "tail": tail,
+        fresh = fresh_adapter(adapter_dir, t0)
+        record["steps"]["train"] = {"ok": ok and fresh, "tail": tail,
                                     "max_steps": args.max_steps,
-                                    "max_len": args.max_len}
+                                    "max_len": args.max_len,
+                                    "prompt_loss": args.prompt_loss,
+                                    "fresh_adapter": fresh}
         if not ok:
             record["status"] = "failed:train"
             save(state, state_path, record)
+            return 1
+        if not fresh:
+            record["status"] = "failed:no-fresh-adapter"
+            save(state, state_path, record)
+            print("[loop] trainer exited 0 but wrote no fresh adapter in %s"
+                  % os.path.relpath(adapter_dir, ROOT), file=sys.stderr)
             return 1
     else:
         record["steps"]["train"] = {"ok": True, "skipped": True}

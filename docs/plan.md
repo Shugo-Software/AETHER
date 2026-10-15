@@ -54,6 +54,21 @@
 > (`base_model: LiquidAI/LFM2.5-2.6B`, LFM Open License v1.0) because the license
 > requires attribution — brand name and lineage tag are different things.
 
+## Hard-won constraint (2026-10-15) — the loss must be masked to the answer
+
+`DataCollatorForLanguageModeling(tok, mlm=False)` masks padding only, so every
+run up to and including loop iteration 1 trained on the whole rendered row. On
+`phase6_pro1` the answers were just **35.8%** of the loss tokens: ~64% of the
+gradient went to reproducing prompts/code, and for 67 rows whose prompt exceeded
+`--max-len` the answer was truncated away, so **100%** of their gradient was
+prompt — the run was partly learning to continue StarCoder files. `train_student.py`
+now defaults to `--prompt-loss masked` (labels `-100` over the prompt head), with
+an explicit `CompletionCollator`, a drop-and-report path for rows left with no
+answer token (a masked row with zero labels → NaN loss), and two diagnostic lines
+naming exactly what the run trains on. Corpus consequences:
+`scripts/verify_dataset.py` measures it and `scripts/fit_corpus.py` fixes it.
+Details: `docs/student-training.md`, `docs/dataset-generation.md`.
+
 ## Hard-won constraint (2026-10-15) — always mask CUDA_VISIBLE_DEVICES for training
 
 Launching `train_student.py` with all three GPUs visible (instead of the

@@ -1,0 +1,30 @@
+{
+ "tool": "scripts/fit_corpus.py",
+ "input": {
+  "path": "datasets\\phase6_pro1.jsonl",
+  "sha256": "f0dc4c2f89b163b7db0f036a700fdaca50d7b3331a71153859192b0eb93a9fed",
+  "rows": 500
+ },
+ "output": {
+  "path": "datasets\\phase6_pro1-fit.jsonl",
+  "rows": 330
+ },
+ "policy": {
+  "max_len": 1536,
+  "max_per_prompt": 4,
+  "min_answer_tokens": 24,
+  "holdout": "datasets\\phase6_pilot1.jsonl",
+  "holdout_prompts": 60
+ },
+ "dropped": {
+  "prompt_too_long": 67,
+  "anchor_holdout": 101,
+  "answer_too_short_after_trim": 2,
+  "duplicate_cap": 0
+ },
+ "trimmed_rows": 79,
+ "estimated_full_row_tokens": {
+  "in": 374755,
+  "out": 347867
+ }
+}

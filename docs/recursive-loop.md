@@ -31,8 +31,33 @@ iteration can be re-run by hand (`--skip-train --skip-export` …) and the state
 (`logs/loop-<tag>.json`) records each step's exit status plus the gate decision.
 
 ```powershell
-python scripts\recursive_train.py --iteration 1 --tag pro1 --corpus datasets\phase6_pro1.jsonl --epochs 3 --sample 40 --min-pass 0.6
+# 1. verify + fit the corpus first (see docs/dataset-generation.md)
+python scripts\verify_dataset.py --jsonl datasets\phase6_pro1.jsonl --max-len 1536 --overlap datasets\phase6_pilot1.jsonl
+python scripts\fit_corpus.py --in datasets\phase6_pro1.jsonl --out datasets\phase6_pro1-fit.jsonl --max-len 1536 --holdout datasets\phase6_pilot1.jsonl
+
+# 2. one iteration
+python scripts\recursive_train.py --iteration 2 --tag pro1 --corpus datasets\phase6_pro1-fit.jsonl --max-steps 64 --max-len 1536 --sample 40 --min-pass 0.6
 ```
+
+## Preconditions the loop enforces (2026-10-15)
+
+- **The corpus must be fitted to `--max-len`.** With completion-only label
+  masking, a row whose prompt fills the budget has nothing left to learn from —
+  and rather than training on junk, the trainer drops such rows and reports
+  `dropped_no_answer`. `fit_corpus.py` prevents ever handing it one.
+- **`--prompt-loss masked` is pinned** as an explicit argument (not left to the
+  trainer's default) so a future default change cannot silently alter what the
+  loop trains. Every run's setting is recorded in `logs/loop-<tag>.json`.
+- **The 6 GB card is masked** for training: the loop reuses `train_control.TRAIN_ENV`
+  (`CUDA_VISIBLE_DEVICES=1`), the same env `run-train.cmd` uses. Without it,
+  accelerate shards the dataloader across all three GPUs (500 rows became 167
+  batches = 3x fewer steps) and the model can land on the 4070 Ti where the
+  teacher lives (OOM).
+- **No stale artifacts can be shipped.** The loop deletes `adapters/<tag>` before
+  training, verifies the adapter was actually rewritten after training started
+  (`fresh_adapter`), deletes the previous iteration's GGUFs before exporting, and
+  refuses to serve if a quant artifact is missing. Each of those failure modes
+  was silent otherwise: the loop would have graded the *previous* model.
 
 ## The judge
 
