@@ -23,6 +23,7 @@ adapters/
 # --- data and caches (regenerate with the scripts; manifests stay) ---------
 datasets/*.jsonl
 datasets/eval/*.jsonl
+datasets/*.rewrite-state.json
 corpus/
 cache/
 logs/
