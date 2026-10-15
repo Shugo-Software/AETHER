@@ -294,6 +294,21 @@ def main():
                   "precision": "fp16", "metrics_file": os.path.basename(metrics_path),
                   "resume": (os.path.relpath(resume_dir, ROOT)
                              if resume_dir else None)})
+    # Diagnostic: HF derives the total step count from
+    # len(train_dataloader) // grad_accum, and both the progress bar and the
+    # dashboard's ETA read that total. Print what HF will actually do, so a
+    # dataset/steps mismatch is visible in the log instead of implied.
+    import math as _math
+    try:
+        _dl = trainer.get_train_dataloader()
+        _spe = max(len(_dl) // max(args.grad_accum, 1), 1)
+        print("[train] rows=%d dataset_rows=%d batch=%d grad_accum=%d "
+              "dataloader_batches=%d steps_per_epoch=%d epochs=%s "
+              "=> total_steps=%d"
+              % (n_rows, len(ds), args.batch, args.grad_accum, len(_dl), _spe,
+                 args.epochs, _spe * int(_math.ceil(args.epochs))), flush=True)
+    except Exception as e:  # noqa: BLE001 — never let diagnostics block training
+        print("[train] dataloader diagnostic failed: %s" % e, flush=True)
     result = trainer.train()
     state(status="saving", train_loss=round(float(result.training_loss), 4))
     trainer.save_model(out_dir)

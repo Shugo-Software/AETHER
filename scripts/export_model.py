@@ -365,7 +365,10 @@ def to_gguf(out_dir, quants, state, imatrix=None):
     if not quants:
         return []
     if not os.path.isfile(CONVERT):
-        raise SystemExit("convert script missing: %s" % CONVERT)
+        raise SystemExit(
+            "llama.cpp conversion script missing: %s\n"
+            "  Set AETHER_LLAMA_CPP_SRC to a llama.cpp checkout, or place one at "
+            "%s (see README quickstart)." % (CONVERT, LLAMA_SRC))
     state.write("converting", stage="gguf")
     base = os.path.basename(out_dir)
     f16 = os.path.join(out_dir, "%s-f16.gguf" % base)

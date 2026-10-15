@@ -54,6 +54,25 @@
 > (`base_model: LiquidAI/LFM2.5-2.6B`, LFM Open License v1.0) because the license
 > requires attribution — brand name and lineage tag are different things.
 
+## Hard-won constraint (2026-10-15) — always mask CUDA_VISIBLE_DEVICES for training
+
+Launching `train_student.py` with all three GPUs visible (instead of the
+`CUDA_VISIBLE_DEVICES=1` mask that `run-train.cmd` and `train_control.py` apply)
+makes accelerate **shard the dataloader across the visible devices**: a 500-row
+corpus became 167 batches, so HF planned 11 optimizer steps per epoch instead of
+31 (33 steps instead of 96 for 3 epochs) — a silent 3x cut in the training
+budget — and the model can land on the 4070 Ti where the teacher already lives
+(OOM at 12 GB). `train_student.py` now prints what HF will actually do
+(`[train] rows=… dataloader_batches=… steps_per_epoch=… => total_steps=…`) so the
+discrepancy is visible in the log rather than implied by the progress bar, and
+`recursive_train.py` reuses `train_control.TRAIN_ENV` for every child process
+(single source of truth). Pin `--max-steps` for any run whose budget matters.
+
+Related trap: `serve_student.ps1` must scope process discovery to student aliases
+(`--alias jadis*`). The teacher is also `llama-server.exe`, and an unscoped
+`-StopAll` killed it once mid-review — 14 review rows recorded worthless
+"connection refused" verdicts before anyone noticed.
+
 ## Hard-won constraints (2026-10-15) — pushing to GitHub hangs on this rig
 
 `git push` stalls indefinitely (reads/fetches are fine). Trace

@@ -30,6 +30,7 @@ param(
     [int]$Port = 8082,
     [int]$Ctx = 4096,
     [string]$Alias = "jadis",
+    [string]$AliasPrefix = "jadis",
     [int]$Threads = 0,
     [switch]$Stop,
     [switch]$StopAll,
@@ -42,8 +43,12 @@ $exe  = "$PSScriptRoot\..\builds\cuda\bin\llama-server.exe"
 $logs = "$PSScriptRoot\..\logs"
 
 function Get-StudentServers {
+    # STUDENT servers only: the teacher (start-teacher-server.ps1, alias
+    # "qwen3.5-9b-teacher") is also llama-server.exe, so matching every
+    # llama-server would let `-StopAll` kill the teacher (it did, once).
     Get-CimInstance Win32_Process -Filter "Name='llama-server.exe'" -ErrorAction SilentlyContinue |
-        Where-Object { $_.CommandLine -match '--port\s+(\d+)' } |
+        Where-Object { $_.CommandLine -match '--port\s+(\d+)' -and
+                       $_.CommandLine -match ('--alias\s+' + [regex]::Escape($AliasPrefix)) } |
         ForEach-Object {
             [PSCustomObject]@{
                 Pid   = $_.ProcessId
@@ -57,7 +62,7 @@ function Stop-OnPort([int]$p) {
     $target = Get-StudentServers | Where-Object { $_.Port -eq $p }
     if (-not $target) { Write-Host "[student] nothing of ours on :$p"; return }
     foreach ($t in $target) {
-        # PID-guarded: only kill a process whose name is llama-server (checked above)
+        # PID-guarded: only processes whose alias matches the student prefix
         Stop-Process -Id $t.Pid -Force
         Write-Host "[student] stopped PID $($t.Pid) (port $p, alias $($t.Alias))"
     }
@@ -66,7 +71,8 @@ function Stop-OnPort([int]$p) {
 if ($StatusOnly -or $Stop -or $StopAll) {
     $all = Get-StudentServers
     if ($StopAll) {
-        foreach ($t in $all) { Stop-Process -Id $t.Pid -Force; Write-Host "[student] stopped PID $($t.Pid) :$($t.Port)" }
+        if (-not $all) { Write-Host "[student] no student servers running (teacher untouched)" }
+        foreach ($t in $all) { Stop-Process -Id $t.Pid -Force; Write-Host "[student] stopped PID $($t.Pid) :$($t.Port) alias=$($t.Alias)" }
         exit 0
     }
     if ($Stop) { Stop-OnPort $Port; exit 0 }

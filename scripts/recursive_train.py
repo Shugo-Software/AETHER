@@ -33,6 +33,18 @@ LOGS = os.path.join(ROOT, "logs")
 PY = os.path.join(ROOT, "venvs", "ml", "Scripts", "python.exe")
 POWERSHELL = "powershell"
 
+# The trainer must run with the SAME environment the dashboard/run-train.cmd use:
+# train_control.TRAIN_ENV pins CUDA_VISIBLE_DEVICES=1 (the 1060 6GB) and moves the
+# caches to G:. Without the mask, accelerate shards the dataloader across every
+# visible GPU (500 rows became 167 batches => 3x fewer optimizer steps) and the
+# model can land on the 4070 Ti, where the teacher already lives (OOM).
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+try:
+    import train_control as _tc
+    BASE_ENV = dict(_tc.TRAIN_ENV)
+except Exception:  # noqa: BLE001 — keep the loop usable if that import breaks
+    BASE_ENV = {}
+
 
 def now():
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -45,6 +57,11 @@ def parse_args():
     ap.add_argument("--corpus",
                     default=os.path.join(ROOT, "datasets", "phase6_pro1.jsonl"))
     ap.add_argument("--epochs", type=float, default=3.0)
+    ap.add_argument("--max-steps", type=int, default=-1,
+                    help="pin the optimizer-step budget explicitly (-1 = use "
+                         "epochs). Use this for reproducible runs: HF derives "
+                         "total steps from the dataloader, which has been "
+                         "observed to disagree with rows/batch/accum.")
     ap.add_argument("--max-len", type=int, default=1024)
     ap.add_argument("--grad-accum", type=int, default=16)
     ap.add_argument("--sample", type=int, default=40,
@@ -71,6 +88,7 @@ def run(cmd, log_name):
     os.makedirs(LOGS, exist_ok=True)
     path = os.path.join(LOGS, log_name)
     env = dict(os.environ)
+    env.update(BASE_ENV)
     env.update({"PYTHONIOENCODING": "utf-8",
                 "HF_HOME": os.path.join(ROOT, "cache", "hf"),
                 "HF_HUB_CACHE": os.path.join(ROOT, "cache", "hf"),
@@ -152,9 +170,13 @@ def main():
                         "--out", os.path.join("adapters", args.tag),
                         "--epochs", str(args.epochs),
                         "--max-len", str(args.max_len),
-                        "--grad-accum", str(args.grad_accum)],
+                        "--grad-accum", str(args.grad_accum)]
+                       + (["--max-steps", str(args.max_steps)]
+                          if args.max_steps and args.max_steps > 0 else []),
                        "loop-%s-it%d-train.log" % (args.tag, args.iteration))
-        record["steps"]["train"] = {"ok": ok, "tail": tail}
+        record["steps"]["train"] = {"ok": ok, "tail": tail,
+                                    "max_steps": args.max_steps,
+                                    "max_len": args.max_len}
         if not ok:
             record["status"] = "failed:train"
             save(state, state_path, record)
@@ -162,9 +184,19 @@ def main():
     else:
         record["steps"]["train"] = {"ok": True, "skipped": True}
 
-    # 2. export: merge -> f16 GGUF (f16 is the source for every quant)
-    quants = []
+    # 2. export: merge -> f16 GGUF (f16 is the source for every quant).
+    #    Old quant artifacts are removed first, so a failed quantize can never
+    #    leave the previous iteration's weights in place to be served silently.
     if not args.skip_export:
+        import glob as _glob
+        stale = [p for p in _glob.glob(os.path.join(export_dir, "*.gguf"))]
+        for p in stale:
+            try:
+                os.remove(p)
+                print("[loop]   removed stale artifact %s" % os.path.basename(p),
+                      flush=True)
+            except OSError as e:
+                print("[loop]   could not remove %s: %s" % (p, e), flush=True)
         cmd = [PY, "-u", os.path.join(ROOT, "scripts", "export_model.py"),
                "--adapter", args.tag, "--name", args.tag,
                "--title", args.tag.upper(), "--gguf", "f16"]
@@ -190,7 +222,8 @@ def main():
             if os.path.isfile(calib):
                 ok, tail = run([os.path.join(bin_dir, "llama-imatrix.exe"),
                                 "-m", f16, "-f", calib, "-o", imatrix,
-                                "-ngl", "99", "-c", "512", "--chunks", "48"],
+                                "-dev", "CUDA1", "-ngl", "99", "-c", "512",
+                                "--chunks", "48"],
                                "loop-%s-it%d-imatrix.log" % (args.tag, args.iteration))
                 record["steps"]["imatrix"] = {"ok": ok, "tail": tail,
                                               "path": imatrix}
@@ -213,6 +246,13 @@ def main():
     if not args.skip_serve:
         a = os.path.join(export_dir, "%s-%s.gguf" % (args.tag, args.quant_a))
         b = os.path.join(export_dir, "%s-%s.gguf" % (args.tag, args.quant_b))
+        missing = [p for p in (a, b) if not os.path.isfile(p)]
+        if missing:
+            record["status"] = "failed:missing-artifacts"
+            record["missing"] = missing
+            save(state, state_path, record)
+            print("[loop] refusing to serve: missing %s" % missing, file=sys.stderr)
+            return 1
         serve = os.path.join(ROOT, "scripts", "serve_student.ps1")
         steps = [("serve-stop", [POWERSHELL, "-ExecutionPolicy", "Bypass", "-File",
                                  serve, "-StopAll"]),
