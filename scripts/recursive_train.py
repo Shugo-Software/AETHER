@@ -40,12 +40,21 @@ POWERSHELL = "powershell"
 # caches to G:. Without the mask, accelerate shards the dataloader across every
 # visible GPU (500 rows became 167 batches => 3x fewer optimizer steps) and the
 # model can land on the 4070 Ti, where the teacher already lives (OOM).
+#
+# BUT the mask must apply to the TRAINER ONLY. Applied to every child it also
+# hides the other two GPUs from llama-server/llama-imatrix, which then re-index
+# the surviving card to CUDA0: the serve step's `--device CUDA2` becomes invalid
+# ("invalid device: CUDA2") and the imatrix's `-dev CUDA1` likewise. Both broke a
+# whole iteration before this was split apart.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 try:
     import train_control as _tc
-    BASE_ENV = dict(_tc.TRAIN_ENV)
+    BASE_ENV = {k: v for k, v in _tc.TRAIN_ENV.items()
+                if k != "CUDA_VISIBLE_DEVICES"}
+    TRAIN_CUDA_MASK = _tc.TRAIN_ENV.get("CUDA_VISIBLE_DEVICES", "1")
 except Exception:  # noqa: BLE001 — keep the loop usable if that import breaks
     BASE_ENV = {}
+    TRAIN_CUDA_MASK = "1"
 
 
 def now():
@@ -90,12 +99,19 @@ def parse_args():
     return ap.parse_args()
 
 
-def run(cmd, log_name):
-    """Run one step, capturing output to logs/<log_name>. Returns (ok, tail)."""
+def run(cmd, log_name, extra_env=None):
+    """Run one step, capturing output to logs/<log_name>. Returns (ok, tail).
+
+    `extra_env` is for step-specific additions (the trainer's CUDA mask) — it is
+    deliberately not baked into BASE_ENV, because hiding GPUs from every child
+    breaks the device names the other steps use.
+    """
     os.makedirs(LOGS, exist_ok=True)
     path = os.path.join(LOGS, log_name)
     env = dict(os.environ)
     env.update(BASE_ENV)
+    if extra_env:
+        env.update(extra_env)
     env.update({"PYTHONIOENCODING": "utf-8",
                 "HF_HOME": os.path.join(ROOT, "cache", "hf"),
                 "HF_HUB_CACHE": os.path.join(ROOT, "cache", "hf"),
@@ -205,7 +221,8 @@ def main():
                         "--prompt-loss", args.prompt_loss]
                        + (["--max-steps", str(args.max_steps)]
                           if args.max_steps and args.max_steps > 0 else []),
-                       "loop-%s-it%d-train.log" % (args.tag, args.iteration))
+                       "loop-%s-it%d-train.log" % (args.tag, args.iteration),
+                       extra_env={"CUDA_VISIBLE_DEVICES": TRAIN_CUDA_MASK})
         fresh = fresh_adapter(adapter_dir, t0)
         record["steps"]["train"] = {"ok": ok and fresh, "tail": tail,
                                     "max_steps": args.max_steps,

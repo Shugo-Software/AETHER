@@ -58,6 +58,12 @@ python scripts\recursive_train.py --iteration 2 --tag pro1 --corpus datasets\pha
   (`fresh_adapter`), deletes the previous iteration's GGUFs before exporting, and
   refuses to serve if a quant artifact is missing. Each of those failure modes
   was silent otherwise: the loop would have graded the *previous* model.
+- **The CUDA mask is trainer-only** (`run(..., extra_env=...)`). Hiding GPUs from
+  every child re-indexes the visible card to `CUDA0`, which breaks the serve step's
+  `--device CUDA2` and the imatrix's device pinning — see `plan.md`.
+- **Chaining.** `hf_datasets.py --queue-run --after-pid <pid>` waits for a running
+  loop to exit before processing the queue, so the next dataset starts only once
+  it has the student cards to itself.
 
 ## The judge
 

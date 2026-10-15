@@ -54,6 +54,30 @@
 > (`base_model: LiquidAI/LFM2.5-2.6B`, LFM Open License v1.0) because the license
 > requires attribution — brand name and lineage tag are different things.
 
+## Hard-won constraint (2026-10-15) — scope the CUDA mask to the trainer, not the loop
+
+`CUDA_VISIBLE_DEVICES=1` is required for **training** (accelerate otherwise shards
+the dataloader across every visible GPU — 500 rows became 167 batches, 3x fewer
+steps — and the model can land on the teacher's card). It must **not** be applied
+to every child process: with only one GPU visible, llama.cpp re-indexes the
+surviving card to `CUDA0`, so
+
+- the serve step's `--device CUDA2` fails with `invalid device: CUDA2` (the 3 GB
+  card no longer exists to that process), and
+- the imatrix's `-dev CUDA1` fails the same way.
+
+Both broke a full iteration (export ✅ → imatrix ❌ → serve ❌). `run()` now takes
+`extra_env` and only the trainer gets the mask; every other step sees all three
+GPUs. Measured device facts worth keeping: `nvidia-smi` order is
+**0 = 3 GB 1060, 1 = 4070 Ti, 2 = 6 GB 1060**, while llama.cpp's own names are
+**CUDA0 = 4070 Ti, CUDA1 = 6 GB 1060, CUDA2 = 3 GB 1060** — resolve by name/VRAM,
+never by index, and never assume the two orderings agree.
+
+Also measured: `-dev` takes *names* (`CUDA0..2`), never bare indices (`-dev 1` is
+rejected), the f16 2.6B model does not fit the 6 GB card for an imatrix pass
+(5.15 GB model vs ~5.2 GB free), and the imatrix's default device is the 4070 Ti
+(where the teacher lives) — so the loop tries the GPU and falls back to CPU.
+
 ## License decision (2026-10-15) — proprietary, all rights reserved, non-commercial
 
 The owner set the license for the whole work: **code, model weights and generated

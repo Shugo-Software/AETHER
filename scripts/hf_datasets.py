@@ -724,6 +724,9 @@ def main():
     ap.add_argument("--min-pass", type=float, default=0.6)
     ap.add_argument("--iteration", type=int, default=0, help="0 = auto-continue")
     ap.add_argument("--yes", action="store_true", help="confirm --drop")
+    ap.add_argument("--after-pid", type=int, default=0,
+                    help="wait for this PID to exit first — chains a queue "
+                         "behind a loop that is still running")
     ap.add_argument("--force", action="store_true",
                     help="--drop even without a verified iteration")
     a = ap.parse_args()
@@ -732,6 +735,12 @@ def main():
         """--json must stay parseable, so silence the human log lines."""
         pass
     log = quiet if a.json else print
+
+    if a.after_pid:
+        print("[hf] waiting for pid %d to exit before starting (the review/loop "
+              "that owns the student cards)" % a.after_pid, flush=True)
+        wait_for_pid(a.after_pid, poll=30, log=print)
+        print("[hf] pid %d is gone - proceeding" % a.after_pid, flush=True)
 
     if a.selftest:
         return selftest(log=print)
