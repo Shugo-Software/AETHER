@@ -54,6 +54,29 @@
 > (`base_model: LiquidAI/LFM2.5-2.6B`, LFM Open License v1.0) because the license
 > requires attribution — brand name and lineage tag are different things.
 
+## License decision (2026-10-15) — proprietary, all rights reserved, non-commercial
+
+The owner set the license for the whole work: **code, model weights and generated
+corpora are proprietary, All Rights Reserved, non-commercial** (`LICENSE`, plus
+`THIRD-PARTY.md` for upstream obligations). An Apache-2.0 `LICENSE` had been added
+here on the assumption that a permissive default was wanted; that assumption was
+wrong and has been corrected. Consequences now encoded:
+
+- the model card's front matter names **our** license
+  (`license_name: aether-proprietary-arr-nc`) and every export ships **both**
+  licenses — ours as `LICENSE`, the upstream LFM text as `LICENSE-UPSTREAM-LFM.md`
+  — plus `THIRD-PARTY.md`; the manifest lists both under `licenses`;
+- the upstream terms are unaffected: Jadis is a derivative of
+  `LiquidAI/LFM2.5-2.6B` (**LFM Open License v1.0**), which permits derivatives
+  under its own conditions (attribution; commercial use below its $10M threshold),
+  and a license on our contribution cannot relicense the base;
+- corpora built from Apache-2.0 / MIT datasets keep their notices in
+  `THIRD-PARTY.md` and in each manifest.
+
+Still to do outside this repo: the **already-published** `Jadis-1.0` and
+`Jadis-1.0-GGUF` cards on HF still declare `apache-2.0` and need their front matter
+plus license files updated to match.
+
 ## Hard-won constraint (2026-10-15) — the loss must be masked to the answer
 
 `DataCollatorForLanguageModeling(tok, mlm=False)` masks padding only, so every

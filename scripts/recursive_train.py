@@ -261,11 +261,24 @@ def main():
         bin_dir = os.path.join(ROOT, "builds", "cuda", "bin")
         if "iq4_xs" in (args.quant_a, args.quant_b):
             if os.path.isfile(calib):
-                ok, tail = run([os.path.join(bin_dir, "llama-imatrix.exe"),
-                                "-m", f16, "-f", calib, "-o", imatrix,
-                                "-dev", "CUDA1", "-ngl", "99", "-c", "512",
-                                "--chunks", "48"],
+                # Imatrix device: try the default device (the fast path) and fall
+                # back to CPU (`-ngl 0`) if it fails. Never hardcode a device name:
+                # `-dev CUDA1` was rejected outright by the binary that actually ran
+                # here, and device lists differ per build. The measured reason the
+                # fallback matters: the 6 GB card OOMs holding the f16 model
+                # (5.15 GB model vs ~5.2 GB free) and the 12 GB card OOMs when the
+                # teacher is GPU-resident (5.15 + 5.6 GB vs 12 GB).
+                imatrix_cmd = [os.path.join(bin_dir, "llama-imatrix.exe"),
+                               "-m", f16, "-f", calib, "-o", imatrix,
+                               "-c", "512", "--chunks", "48"]
+                ok, tail = run(imatrix_cmd + ["-ngl", "99"],
                                "loop-%s-it%d-imatrix.log" % (args.tag, args.iteration))
+                if not ok:
+                    print("[loop]   GPU imatrix failed — retrying on CPU (-ngl 0)",
+                          flush=True)
+                    ok, tail = run(imatrix_cmd + ["-ngl", "0"],
+                                   "loop-%s-it%d-imatrix-cpu.log"
+                                   % (args.tag, args.iteration))
                 record["steps"]["imatrix"] = {"ok": ok, "tail": tail,
                                               "path": imatrix}
                 if ok:

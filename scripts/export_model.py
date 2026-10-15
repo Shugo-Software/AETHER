@@ -64,6 +64,16 @@ BASE_LICENSE_NAME = "LFM Open License v1.0"
 # human-readable BASE_LICENSE_NAME.
 BASE_LICENSE_SLUG = "lfm-open-license-v1.0"
 BASE_LICENSE_URL = "https://huggingface.co/LiquidAI/LFM2.5-2.6B/blob/main/LICENSE"
+BASE_LICENSE_FILE = "LICENSE-UPSTREAM-LFM.md"
+
+# Our own terms (the repo's LICENSE). The card's front matter names OUR license,
+# because that is what a user of this release must satisfy on top of the upstream
+# one; the upstream license applies too (this model is a derivative) and ships
+# alongside, so both are stated in the card and both files are exported.
+OUR_LICENSE_NAME = ("AETHER Proprietary License - All Rights Reserved "
+                    "(Non-Commercial)")
+OUR_LICENSE_SLUG = "aether-proprietary-arr-nc"
+OUR_LICENSE_URL = ("https://github.com/Shugo-Software/AETHER/blob/main/LICENSE")
 IMATRIX = os.path.join(ROOT, "builds", "cuda", "bin", "llama-imatrix.exe")
 
 
@@ -136,8 +146,8 @@ def _copy_custom_code(out_dir):
 _MODEL_CARD = """\
 ---
 license: other
-license_name: {license_slug}
-license_link: {license_url}
+license_name: {our_slug}
+license_link: {our_url}
 base_model: {base}
 pipeline_tag: text-generation
 library_name: transformers
@@ -163,10 +173,12 @@ no adapter bookkeeping.
 ## Lineage
 
 `{title}` is a derivative of [`{base}`](https://huggingface.co/{base}) by Liquid
-AI. Base architecture, tokenizer and chat template are unchanged; the upstream
-license (**{license_name}**) governs this model too and ships here as `LICENSE`.
-The distillation teacher generated training text only — **none of its weights are
-present in this model**.
+AI. Base architecture, tokenizer and chat template are unchanged, so the upstream
+license (**{base_license_name}**) still governs the base and ships here as
+`{base_license_file}`. On top of it, this release is covered by the **{our_name}**
+— see `LICENSE`. `THIRD-PARTY.md` lists every upstream component, dataset and
+toolchain involved. The distillation teacher generated training text only —
+**none of its weights are present in this model**.
 
 ## Method
 
@@ -223,10 +235,18 @@ llama-cli -m {quant_example} -c 4096 -cnv --jinja
 {gguf_table}
 ## License
 
-{license_name} — see the [upstream license]({license_url}) and the copy shipped
-in this repo. Derivatives are permitted; commercial use is subject to the revenue
-thresholds in the upstream license. This model's weights derive from the base
-model and remain under that license.
+**{our_name}** — see `LICENSE`. No commercial use and no redistribution without
+written permission; commercial rights are available on request.
+
+Two sets of terms apply, because this is a derivative of `{base}`:
+
+| Terms | File | What it means here |
+|---|---|---|
+| {our_name} | `LICENSE` | Our contribution: non-commercial use only, no redistribution. |
+| {base_license_name} | `{base_license_file}` | The upstream base model's license. Attribution must be retained and its conditions (including its revenue thresholds) still hold — see the [upstream license]({base_license_url}). |
+
+`THIRD-PARTY.md` lists the datasets and toolchains used. Nothing in our license
+reduces or replaces the upstream terms.
 """
 
 
@@ -294,36 +314,49 @@ def _write_card(out_dir, name, title, gguf_files, repo=None, gguf_repo=None):
             title=title, base=STUDENT, adapter=name,
             license_name=BASE_LICENSE_NAME, license_slug=BASE_LICENSE_SLUG,
             license_url=BASE_LICENSE_URL,
+            our_name=OUR_LICENSE_NAME, our_slug=OUR_LICENSE_SLUG,
+            our_url=OUR_LICENSE_URL,
+            base_license_name=BASE_LICENSE_NAME,
+            base_license_url=BASE_LICENSE_URL,
+            base_license_file=BASE_LICENSE_FILE,
             repo=repo or "your-org/%s" % name,
             data_note=_data_note(name), gguf_table=_gguf_table(gguf_files),
             gguf_repo_note=repo_note, quant_example=quant_example))
 
 
 def _copy_license(out_dir):
-    """Ship the upstream license text with the export (license requirement).
+    """Ship BOTH licenses plus the third-party list.
 
-    The cached base snapshot carries no LICENSE file, so fetch it from the Hub;
-    if that fails, leave a notice file so the requirement stays visible.
+    Two obligations, not one: our own terms must accompany our work (`LICENSE`,
+    copied from the repo), and the upstream base license must accompany a
+    derivative (LFM Open License v1.0 — fetched from the Hub, since the cached
+    snapshot has no LICENSE file). Returns (our_file, upstream_file).
     """
-    dst = os.path.join(out_dir, "LICENSE")
-    if os.path.exists(dst):
-        return "LICENSE"
+    ours = os.path.join(ROOT, "LICENSE")
+    if os.path.isfile(ours):
+        shutil.copy2(ours, os.path.join(out_dir, "LICENSE"))
+    third = os.path.join(ROOT, "THIRD-PARTY.md")
+    if os.path.isfile(third):
+        shutil.copy2(third, os.path.join(out_dir, "THIRD-PARTY.md"))
+
+    dst = os.path.join(out_dir, BASE_LICENSE_FILE)
     snap = _snapshot_dir()
     for cand in ("LICENSE", "LICENSE.txt", "LICENSE.md"):
         if snap and os.path.isfile(os.path.join(snap, cand)):
             shutil.copy2(os.path.join(snap, cand), dst)
-            return "LICENSE"
+            return "LICENSE", BASE_LICENSE_FILE
     try:
         from huggingface_hub import hf_hub_download
         shutil.copy2(hf_hub_download(repo_id=STUDENT, filename="LICENSE"), dst)
-        return "LICENSE"
+        return "LICENSE", BASE_LICENSE_FILE
     except Exception as e:  # noqa: BLE001 — offline / no upstream license file
-        with open(dst + "-NOTICE.md", "w", encoding="utf-8") as fh:
-            fh.write("# License\n\nThis model is a derivative of `%s` and remains "
-                     "under the **%s**:\n\n%s\n\n(could not download the license "
-                     "text automatically: %s)\n"
-                     % (STUDENT, BASE_LICENSE_NAME, BASE_LICENSE_URL, e))
-        return "LICENSE-NOTICE.md"
+        with open(dst, "w", encoding="utf-8") as fh:
+            fh.write("# %s\n\nThis model is a derivative of `%s` and remains "
+                     "under the **%s**:\n\n%s\n\n(The license text could not be "
+                     "downloaded automatically: %s)\n"
+                     % (BASE_LICENSE_NAME, STUDENT, BASE_LICENSE_NAME,
+                        BASE_LICENSE_URL, e))
+        return "LICENSE", BASE_LICENSE_FILE
 
 
 def _write_manifest(out_dir, rec):
@@ -468,7 +501,7 @@ def push_hub(out_dir, repo, public, state, gguf_repo=None):
     if gguf_repo and ggufs:
         api.create_repo(repo_id=gguf_repo, repo_type="model",
                         private=not public, exist_ok=True)
-        for extra in ("README.md", "LICENSE"):
+        for extra in ("README.md", "LICENSE", BASE_LICENSE_FILE, "THIRD-PARTY.md"):
             path = os.path.join(out_dir, extra)
             if os.path.isfile(path):
                 api.upload_file(path_or_fileobj=path, path_in_repo=extra,
@@ -556,7 +589,8 @@ def main():
             else:
                 merge(adapter_dir, out_dir, state)
             gguf_files = to_gguf(out_dir, quants, state, imatrix=args.imatrix)
-            license_file = _copy_license(out_dir)
+            _copy_license(out_dir)
+            license_file = "LICENSE"
         # Card + manifest BEFORE the push, so the Hub repo receives them too.
         repo = args.repo
         if args.hub and not repo:
@@ -576,8 +610,17 @@ def main():
                     gguf_repo=gguf_repo)
         manifest = {"name": name, "title": title, "base_model": STUDENT,
                     "adapter": adapter_name, "merged_utc": _now(),
-                    "dtype": "fp16", "license": BASE_LICENSE_NAME,
-                    "license_file": license_file, "gguf_repo": gguf_repo,
+                    "dtype": "fp16",
+                    # Both sets of terms apply to a derivative; the card's front
+                    # matter names ours, so the manifest does too, and lists the
+                    # upstream one explicitly rather than leaving it implied.
+                    "license": OUR_LICENSE_NAME,
+                    "license_file": license_file,
+                    "licenses": [{"name": OUR_LICENSE_NAME, "file": "LICENSE"},
+                                 {"name": BASE_LICENSE_NAME,
+                                  "file": BASE_LICENSE_FILE}],
+                    "third_party_file": "THIRD-PARTY.md",
+                    "gguf_repo": gguf_repo,
                     "gguf": [os.path.basename(f) for f in gguf_files],
                     "hub_url": None}
         _write_manifest(out_dir, manifest)

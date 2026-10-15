@@ -55,9 +55,9 @@ venvs\ml\Scripts\python.exe scripts\export_model.py `
 ```
 
 With `--hub`, the export is split HF-style: the **model repo** gets the merged
-weights, tokenizer, card, license and manifest (`*.gguf` excluded), and the
-quants go to a sibling repo (`<owner>/<name>-GGUF` by default, which also gets a
-copy of the card and license).
+weights, tokenizer, card, both license texts and manifest (`*.gguf` excluded), and
+the quants go to a sibling repo (`<owner>/<name>-GGUF` by default, which also gets
+a copy of the card, both licenses and `THIRD-PARTY.md`).
 
 `--name` (artifact slug) and `--title` (card display name) let the **release
 identity differ from the adapter directory** — the export dir, GGUF basenames,
@@ -162,22 +162,25 @@ stored one. Pushes are **private** unless `--public` / "push public" is chosen.
 
 ## Release hygiene (ship a branded model, keep the lineage honest)
 
-Every export writes a **branded card + the upstream license + a manifest**, and it
-does so *before* any push so the Hub repo receives them:
+Every export writes a **branded card + both license texts + the third-party list +
+a manifest**, and it does so *before* any push so the Hub repo receives them:
 
 | Item | What it gives you |
 |---|---|
-| `README.md` | Front-matter (`base_model`, `license_name`, tags), the release title, a lineage section, a method table built from the actual run record (rows/epochs/lr read from `logs/train-<name>.json`), a reasoning/"Thinking" section describing the `<think>` turn shape, runnable `transformers` + `llama.cpp` snippets, and a GGUF table with real sizes |
-| `LICENSE` | The upstream license text, fetched from the base repo (or a `LICENSE-NOTICE.md` pointing at it if download fails) |
-| `export-manifest.json` | `name`/`title`, `base_model`, source `adapter`, `merged_utc`, `dtype`, `license`, `gguf` file list, `gguf_repo`, `hub_url` |
+| `README.md` | Front-matter (`base_model`, `license_name` = **ours**, tags), the release title, a lineage section that names *both* licenses, a method table built from the actual run record (rows/epochs/lr read from `logs/train-<name>.json`), a reasoning/"Thinking" section describing the `<think>` turn shape, runnable `transformers` + `llama.cpp` snippets, and a GGUF table with real sizes |
+| `LICENSE` | **Our** terms (copied from the repo): proprietary, all rights reserved, non-commercial |
+| `LICENSE-UPSTREAM-LFM.md` | The upstream base license (**LFM Open License v1.0**), fetched from the base repo — required because the model is a derivative (a notice file if the download fails) |
+| `THIRD-PARTY.md` | Every upstream component, dataset and toolchain with its license and how it is used |
+| `export-manifest.json` | `name`/`title`, `base_model`, source `adapter`, `merged_utc`, `dtype`, `license` (ours) **and** `licenses` (both, with filenames), `third_party_file`, `gguf` file list, `gguf_repo`, `hub_url` |
 
 Two separate ideas, keep them separate:
 
 - **Brand name** — `--name`/`--title` (e.g. `jadis-1.0` → `Jadis 1.0`). This is
   what the release is called.
 - **Lineage** — the card must still declare `base_model: LiquidAI/LFM2.5-2.6B`
-  and the LFM Open License v1.0, because the license requires attribution for
-  derivatives. A brand does not override a license.
+  and ship the LFM Open License v1.0, because that license requires attribution
+  for derivatives. A brand does not override a license, and neither does our own
+  license: the upstream terms always apply on top of ours.
 
 Pushes default to **private**; `--public` (or "push public") is an explicit act.
 Auth is never accepted from the web UI — the exporter reads `HF_TOKEN` or the
@@ -190,10 +193,20 @@ behaviour rather than trusting the loss curve.
 
 ## Licensing (already in the generated card)
 
-Jadis is a derivative of `LiquidAI/LFM2.5-2.6B` → **LFM Open License v1.0**
-(derivatives explicitly permitted; commercial use under the $10M revenue
-threshold — see `plan.md` open gates). The teacher (Qwen3.5-9B) shaped the
-training data but its weights are not in the student.
+**Our terms:** the AETHER pipeline, the Jadis model line and every generated
+corpus are **proprietary — all rights reserved, non-commercial** (`LICENSE`).
+Commercial use, redistribution and derivative distribution require written
+permission (set by the owner on 2026-10-15; an earlier Apache-2.0 default in this
+repo was a mistaken assumption and was corrected).
+
+**Upstream terms, which continue to apply:** Jadis is a derivative of
+`LiquidAI/LFM2.5-2.6B` → **LFM Open License v1.0** (derivatives explicitly
+permitted; commercial use under the $10M revenue threshold — see `plan.md` open
+gates), so its attribution and conditions must be met in addition to ours, and
+its text ships as `LICENSE-UPSTREAM-LFM.md`. Our license restricts *our*
+contribution; it cannot and does not relicense the base. The teacher (Qwen3.5-9B)
+shaped the training data but its weights are not in the student.
+`THIRD-PARTY.md` carries the full list.
 
 ## Plumbing
 

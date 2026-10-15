@@ -1,5 +1,7 @@
 # AETHER
 
+<img src="assets/aether-logo.png" alt="AETHER" width="180" align="right">
+
 **A local teacher → student distillation pipeline** for small language models,
 built and measured on a single heterogeneous Windows rig (one Ada GPU as the
 teacher, two Pascal GPUs as students). The trains of interest are the **Jadis**
@@ -87,13 +89,24 @@ python scripts\check_no_personal_data.py --forbid myhandle
 
 Released weights are published on Hugging Face under **ShugoSoftware** (e.g.
 `ShugoSoftware/Jadis-1.0`), with the GGUF set in a sibling `-GGUF` repository.
-Model cards state the lineage (`base_model: LiquidAI/LFM2.5-2.6B`) and ship the
-upstream license text.
+Model cards state the lineage (`base_model: LiquidAI/LFM2.5-2.6B`) and ship
+**both** license texts — ours and the upstream one.
 
 ## Licensing
 
-- **Code** in this repository: Apache License 2.0 (`LICENSE`).
-- **Model weights**: derivatives of `LiquidAI/LFM2.5-2.6B` → **LFM Open License
-  v1.0**, which requires attribution and ships with the weights.
-- **Datasets**: each keeps its own license; see the manifest and
-  `docs/dataset-generation.md`.
+**Proprietary — All Rights Reserved, non-commercial.** See `LICENSE`.
+
+- **Code** in this repository: © 2026 Shugo-Software. No commercial use, no
+  redistribution, no derivative distribution without written permission.
+- **Model weights** (Jadis line: adapters, merged checkpoints, GGUF
+  quantisations): the same terms. Because they are **derivatives of
+  `LiquidAI/LFM2.5-2.6B`**, the **LFM Open License v1.0** also applies and is
+  shipped with every export as `LICENSE-UPSTREAM-LFM.md`; its attribution and
+  revenue-threshold conditions must be met in addition to ours. Our license adds
+  a non-commercial restriction to our contribution — it does not relicense
+  anything upstream.
+- **Datasets** keep their own licenses. `THIRD-PARTY.md` lists every upstream
+  component, dataset and toolchain with its license and how it is used; each
+  corpus manifest records its source repo, revision and parameters.
+
+Commercial rights are available on request.
