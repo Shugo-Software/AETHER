@@ -167,6 +167,8 @@ def _corpus_panel(snap):
             v = tr.get(key)
             if v is None:
                 continue
+            if key == 'loss' and not tr.get('loss'):
+                continue
             if key == 'prompt_loss':
                 v = ('answers only (masked)' if v == 'masked'
                      else 'prompt + answer (diluted)')

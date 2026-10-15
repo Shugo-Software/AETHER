@@ -233,9 +233,15 @@ def corpus_state():
             with open(states[-1], encoding='utf-8') as fh:
                 st = json.load(fh)
             cfg = st.get('config') or {}
+            # The state file is merged across runs, so train_loss can be the
+            # PREVIOUS run's value while this one is still training (seen: the
+            # panel showing 5.82 from iteration 1 while iteration 2 was at 0.77).
+            # Only report a final loss once the run that wrote the file is done.
+            done = st.get('status') in ('done', 'saving')
             out['train'] = {
                 'file': os.path.basename(states[-1]), 'tag': st.get('tag'),
-                'status': st.get('status'), 'loss': st.get('train_loss'),
+                'status': st.get('status'),
+                'loss': st.get('train_loss') if done else None,
                 'dataset': cfg.get('dataset'), 'max_len': cfg.get('max_len'),
                 'max_steps': cfg.get('max_steps'), 'lr': cfg.get('lr'),
                 'prompt_loss': cfg.get('prompt_loss'),
