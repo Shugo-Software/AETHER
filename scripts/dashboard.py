@@ -672,6 +672,13 @@ def render(snap):
 
     # Recursive loop: iterations and their gate decisions
     lp = snap.get("loop") or {}
+    if not lp.get("iterations") and snap.get("run_tag"):
+        # A run is known but the loop has written no record yet (its first stage
+        # is still running): show that, instead of an empty space.
+        h.append('</div><div class="panel">')
+        h.append("<h2>Recursive loop (iterations + gate)</h2>")
+        h.append('<div class="card small">No loop record yet for <b>%s</b>.</div>'
+                 % html.escape(str(snap.get("run_tag"))))
     if lp.get("iterations"):
         h.append('</div><div class="panel">')
         # Name the run this record belongs to: it is the loop's own gate history,
@@ -679,6 +686,15 @@ def render(snap):
         h.append("<h2>Recursive loop (iterations + gate)<span class=\"small\">"
                  " &mdash; %s</span></h2>"
                  % html.escape(str(lp.get("tag") or lp.get("file") or "?")))
+        if lp.get("stale_run"):
+            # The current run has not recorded a loop file yet, so these rows are
+            # another run's history. Say which, rather than let them read as ours.
+            h.append('<div class="card small">No loop record yet for '
+                     '<b>%s</b> &mdash; the rows below are the last recorded run '
+                     '(<b>%s</b>, %s).</div>'
+                     % (html.escape(str(lp.get("expected_tag") or "?")),
+                        html.escape(str(lp.get("tag") or "?")),
+                        html.escape(str(lp.get("file") or "?"))))
         h.append('<table><tr><th>It</th><th>Corpus</th><th>Steps</th>'
                  "<th>Gate</th><th>Status</th></tr>")
         for it in lp["iterations"]:

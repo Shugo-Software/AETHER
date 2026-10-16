@@ -233,23 +233,29 @@ def _loop_tag(path):
     return None
 
 
-def loop_state(path=None):
+def loop_state(path=None, run_tag=None):
     """The recursive loop's own record: iterations, gates, and what it queued.
 
     `path` is the loop file belonging to the run the rest of the page shows;
     without it the newest loop wins (loop-selftest.json is a fixture, never a
     run, so _newest() never returns it).
+
+    `run_tag` is that run's tag. When the loop has not written its own file yet —
+    a first iteration sitting in its multi-hour train step, before this was
+    fixed — the newest file belongs to an *earlier* run, and the panel must say
+    so instead of letting its iteration read as the current one.
     """
     if path is None:
         path = _newest(['loop-*.json'])
     if not path:
-        return {'file': None, 'tag': None, 'iterations': []}
+        return {'file': None, 'tag': run_tag, 'iterations': [],
+                'expected_tag': run_tag}
     try:
         with open(path, encoding='utf-8') as fh:
             state = json.load(fh)
     except (OSError, ValueError):
         return {'file': os.path.basename(path), 'tag': _loop_tag(path),
-                'iterations': []}
+                'iterations': [], 'expected_tag': run_tag}
     iters = []
     for it in state.get('iterations', []):
         gate = it.get('gate') or {}
@@ -267,8 +273,12 @@ def loop_state(path=None):
                      'floor': gate.get('floor'),
                      'clears_floor': gate.get('clears_floor'),
                      'no_regression': gate.get('no_regression')}})
-    return {'file': os.path.basename(path),
-            'tag': state.get('tag') or _loop_tag(path), 'iterations': iters}
+    # A loop record that belongs to another run is labelled as such (`stale_run`),
+    # never silently presented as this run's iterations.
+    tag_seen = state.get('tag') or _loop_tag(path)
+    return {'file': os.path.basename(path), 'tag': tag_seen, 'iterations': iters,
+            'expected_tag': run_tag,
+            'stale_run': bool(run_tag and tag_seen and tag_seen != run_tag)}
 
 
 def teacher_state():
@@ -686,7 +696,8 @@ def snapshot():
             'host': _cached('host', 10, host_state),
             'teacher': _cached('teacher', 5, teacher_state),
             'endpoints': _cached('endpoints', 6, endpoints_state),
-            'loop': loop_state(runs.get('loop') or _newest(['loop-*.json'])),
+            'loop': loop_state(runs.get('loop') or _newest(['loop-*.json']),
+                               run_tag=tag),
             'run_tag': tag,
             'datasets': _cached('inventory', 15, dataset_inventory),
             'training': training_status(state_file, tag, runs),

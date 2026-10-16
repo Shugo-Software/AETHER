@@ -30,6 +30,14 @@ Every step is a subprocess call to the same script a human would run, so any
 iteration can be re-run by hand (`--skip-train --skip-export` …) and the state
 (`logs/loop-<tag>.json`) records each step's exit status plus the gate decision.
 
+The record is written **before** the work, not only after it: the iteration is
+saved as `running` on entry, then re-saved as `running:<stage>` as each stage
+starts (`pre-stop`, `train`, `export`, `quantize`, `serve`, `review`). Without
+that, a first iteration spending ~3 h in its train step had no `loop-<tag>.json`
+at all, so the dashboard's loop panel fell back to the newest loop file of *any*
+tag — showing another run's failed iteration beside the live one — and a loop
+killed mid-step left no record that the iteration had started.
+
 ```powershell
 # 1. verify + fit the corpus first (see docs/dataset-generation.md)
 python scripts\verify_dataset.py --jsonl datasets\phase6_pro1.jsonl --max-len 1536 --overlap datasets\phase6_pilot1.jsonl

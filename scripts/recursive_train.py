@@ -194,11 +194,29 @@ def main():
     record = {"iteration": args.iteration, "started_utc": now(),
               "corpus": os.path.relpath(args.corpus, ROOT),
               "epochs": args.epochs, "steps": {}}
+    # Record the iteration *before* running it, and re-save as each stage starts.
+    # The train step alone ran ~3 h on this rig, and save() was otherwise reachable
+    # only on failure or completion: for that whole window logs/loop-<tag>.json did
+    # not exist, so the dashboard's loop panel fell back to the newest loop file of
+    # any tag — showing the previous run's failed iteration beside the live one —
+    # and a loop killed mid-step left no trace that the iteration had started.
+    # (train_student.py already writes 'training' while it works; this matches it.)
+    def mark(stage):
+        record["status"] = "running:%s" % stage
+        save(state, state_path, record)
+        print("[loop] state -> %s (%s)"
+              % (os.path.relpath(state_path, ROOT), record["status"]), flush=True)
+
+    record["status"] = "running"
+    save(state, state_path, record)
+    print("[loop] state -> %s (running)" % os.path.relpath(state_path, ROOT),
+          flush=True)
     export_dir = os.path.join(ROOT, "exports", args.tag)
 
     # 0. free the 6 GB card: training and student B cannot share it. This also
     #    guarantees the later serve step starts from a clean slate.
     if not args.skip_train or not args.skip_serve:
+        mark("pre-stop")
         serve = os.path.join(ROOT, "scripts", "serve_student.ps1")
         ok, tail = run([POWERSHELL, "-ExecutionPolicy", "Bypass", "-File", serve,
                         "-StopAll"], "loop-%s-it%d-pre-stop.log"
@@ -215,6 +233,7 @@ def main():
             shutil.rmtree(adapter_dir, ignore_errors=True)
             print("[loop]   cleared previous adapter %s"
                   % os.path.relpath(adapter_dir, ROOT), flush=True)
+        mark("train")
         t0 = time.time()
         ok, tail = run([PY, "-u", os.path.join(ROOT, "scripts", "train_student.py"),
                         "--dataset", args.corpus, "--tag", args.tag,
@@ -259,6 +278,7 @@ def main():
                       flush=True)
             except OSError as e:
                 print("[loop]   could not remove %s: %s" % (p, e), flush=True)
+        mark("export")
         cmd = [PY, "-u", os.path.join(ROOT, "scripts", "export_model.py"),
                "--adapter", args.tag, "--name", args.tag,
                "--title", args.tag.upper(), "--gguf", "f16"]
@@ -275,6 +295,7 @@ def main():
     # from this iteration's weights (an imatrix from older weights is a
     # measurable quality regression), then f16 for the 6 GB card.
     if not args.skip_export:
+        mark("quantize")
         f16 = os.path.join(export_dir, "%s-f16.gguf" % args.tag)
         imatrix = os.path.join(ROOT, "cache", "quants",
                                "imatrix-%s.gguf" % args.tag)
@@ -329,6 +350,7 @@ def main():
             print("[loop] refusing to serve: missing %s" % missing, file=sys.stderr)
             return 1
         serve = os.path.join(ROOT, "scripts", "serve_student.ps1")
+        mark("serve")
         steps = [("serve-stop", [POWERSHELL, "-ExecutionPolicy", "Bypass", "-File",
                                  serve, "-StopAll"]),
                  ("serve-a", [POWERSHELL, "-ExecutionPolicy", "Bypass", "-File",
@@ -356,6 +378,7 @@ def main():
                             "%s-fix%d.jsonl" % (args.tag, args.iteration))
     reviews = {}
     if not args.skip_review:
+        mark("review")
         for label, port in (("a", args.student_a_port), ("b", args.student_b_port)):
             tag = "%s-it%d-%s" % (args.tag, args.iteration, label)
             cmd = [PY, "-u", os.path.join(ROOT, "scripts", "review_students.py"),
