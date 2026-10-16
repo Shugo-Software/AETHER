@@ -1,0 +1,67 @@
+{
+  "tag": "starcoderdata-code",
+  "created_utc": "2026-10-16T07:00:42+00:00",
+  "purpose": "training",
+  "params": {
+    "min_chars": 400,
+    "min_lines": 8,
+    "max_chars": 5200,
+    "min_head": 200,
+    "min_completion": 80,
+    "head_ratio": 0.6,
+    "lang": [
+      "python",
+      "javascript",
+      "typescript",
+      "c",
+      "cpp",
+      "go",
+      "rust",
+      "java",
+      "sql",
+      "shell"
+    ],
+    "limit": 3000,
+    "max_files": 3000
+  },
+  "source": {
+    "repo": "bigcode/starcoderdata",
+    "root": "cache\\datasets\\bigcode--starcoderdata",
+    "shards": [
+      "python\\train-00000-of-00059.parquet",
+      "python\\train-00001-of-00059.parquet",
+      "python\\train-00002-of-00059.parquet",
+      "python\\train-00003-of-00059.parquet",
+      "python\\train-00004-of-00059.parquet",
+      "python\\train-00005-of-00059.parquet",
+      "python\\train-00006-of-00059.parquet",
+      "python\\train-00007-of-00059.parquet"
+    ]
+  },
+  "counts": {
+    "inspected": 3000,
+    "written": 2387,
+    "drops": {
+      "too_short": 460,
+      "generated_marker": 97,
+      "minified": 33,
+      "low_signal": 15,
+      "completion_too_small": 7,
+      "too_few_lines": 1
+    },
+    "notes": {
+      "windowed": 652,
+      "ok": 1735
+    }
+  },
+  "output": {
+    "jsonl": "datasets\\starcoderdata-code.jsonl",
+    "rows": 2387,
+    "sha256": "4e77f23ddb03203d34506a2b97524b5b8d817ff8593f6c98fcf49d4f4bad2911"
+  },
+  "recipe": "code_continue: the head of each file is the prompt, the lines that follow are the completion. Deterministic — no teacher, no sampling — so the same slice always yields the same bytes.",
+  "provenance": {
+    "tool": "scripts/code_sft.py",
+    "seconds": 5.3
+  }
+}

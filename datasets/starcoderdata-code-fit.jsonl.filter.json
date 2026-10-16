@@ -1,0 +1,30 @@
+{
+ "tool": "scripts/fit_corpus.py",
+ "input": {
+  "path": "datasets\\starcoderdata-code.jsonl",
+  "sha256": "4e77f23ddb03203d34506a2b97524b5b8d817ff8593f6c98fcf49d4f4bad2911",
+  "rows": 2387
+ },
+ "output": {
+  "path": "datasets\\starcoderdata-code-fit.jsonl",
+  "rows": 2384
+ },
+ "policy": {
+  "max_len": 1536,
+  "max_per_prompt": 4,
+  "min_answer_tokens": 24,
+  "holdout": null,
+  "holdout_prompts": 0
+ },
+ "dropped": {
+  "prompt_too_long": 3,
+  "anchor_holdout": 0,
+  "answer_too_short_after_trim": 0,
+  "duplicate_cap": 0
+ },
+ "trimmed_rows": 147,
+ "estimated_full_row_tokens": {
+  "in": 1938688,
+  "out": 1914334
+ }
+}
