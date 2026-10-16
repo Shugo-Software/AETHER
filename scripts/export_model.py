@@ -672,6 +672,11 @@ def main():
             raise SystemExit("unknown quant type(s): %s (one of: %s)"
                              % (", ".join(bad), ", ".join(sorted(QUANT_TYPES))))
         out_dir = args.out or os.path.join(EXPORTS, name)
+        # The adapter path creates this inside merge(); --base-only skips the merge, so
+        # the directory has to exist before the converter writes its .part file into it
+        # (learned the loud way: the converter died with FileNotFoundError, and the
+        # atomic .part + _gguf_ok guard meant nothing was left behind).
+        os.makedirs(out_dir, exist_ok=True)
         state = State(name, out_dir)
         from huggingface_hub import snapshot_download
         print("[export] base model: %s" % am.describe(STUDENT), flush=True)
