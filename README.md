@@ -11,6 +11,10 @@ Everything here is reproducible from source: dataset generation, QLoRA training,
 merging, GGUF quantization, independent verification, behavioural evaluation and
 the dashboard that drives it all.
 
+> **Release 1.0.0** — 2026-10-15. The first packaged release: the pipeline runs
+> end to end from the dashboard, on external datasets as well as generated ones.
+> See [What's in 1.0.0](#whats-in-100) below.
+
 ```
 ┌──────────────────────────────┐        ┌──────────────────────────────────────┐
 │ TEACHER  Qwen3.5-9B (Q4_K_M) │        │ STUDENT  LFM2.5-2.6B  (QLoRA fp16)   │
@@ -23,11 +27,33 @@ the dashboard that drives it all.
                      (recursive loop: reviewers gate each iteration)
 ```
 
+## What's in 1.0.0
+
+The whole path from raw data to a served, quantized student, driven from one page:
+
+| Stage | What it does | Where |
+|---|---|---|
+| **Dataset generation** | Teacher-written A/B pairs, manifests, dedupe, anchor holdout | `scripts/generate_dataset.py` · `docs/dataset-generation.md` |
+| **External ingestion** | Link any Hugging Face dataset → pull to G: → convert → verify → fit. Whole dataset by default (`--limit 0`), every shard of the chosen split read, and agentic traces mined for their plain answers instead of refused | `scripts/hf_datasets.py` · `scripts/ingest_hf_dataset.py` |
+| **Queue** | Ordered and self-healing: a dataset whose runner died is *stalled*, not locked, and resumes at `train`. `--queue-plan` prints what would run — and how big a pull is — before anything downloads | `docs/dashboard.md` |
+| **Student training** | QLoRA fp16 on the 6 GB Pascal card, loss masked to the answer | `scripts/train_student.py` · `docs/student-training.md` |
+| **Recursive loop** | train → export → serve → teacher review → gate; failures become the next corpus | `scripts/recursive_train.py` · `docs/recursive-loop.md` |
+| **Export** | merge LoRA → standalone fp16 → GGUF (f16 / q8_0 / q4_k_m / iq4_xs …) → optional Hub push, then independent verification | `scripts/export_model.py` · `scripts/verify_export.py` · `docs/export.md` |
+| **Dashboard** | 12 panels, 5 s live polling, controls for training / export / the queue, plan + preflight, loopback or tailnet bind | `scripts/dashboard.py` · `docs/dashboard.md` |
+
+Measured while packaging this release: converting `openai/gsm8k` went from
+**2,000 rows to 7,473** once the caps were removed (`--limit N` still caps on
+purpose, and `--limit 2000` was verified to still yield exactly 2,000); an agentic
+code-SFT set (`11-47/MiniMax-M2.1-Code-SFT`) now yields **654 records from 1,306
+rows** where it previously yielded none, each tagged `provenance.agentic` with the
+caveat recorded; and a queue item whose runner was killed mid-iteration is reported
+**stalled** and resumes at `train` instead of locking its row forever.
+
 ## What is in this repository
 
 | Path | What it is |
 |---|---|
-| `scripts/` | The pipeline: dataset generation, QLoRA training, dashboard + controls, export (merge → GGUF → Hub), verification, evaluation, benchmarks |
+| `scripts/` | The pipeline: dataset generation **and external dataset ingestion** (pull to G: → convert → verify → fit), the queue and its preflight plan, QLoRA training, the recursive loop, export (merge → GGUF → Hub), verification, evaluation, benchmarks, and the dashboard that drives it all |
 | `docs/` | The engineering record: hardware inventory, build guide, benchmarks, dataset generation, training, export, dashboard, and `plan.md` — **the canonical roadmap** |
 | `docs/benchmarks/` | Raw benchmark evidence (CSV) and the summaries quoted in the docs |
 | `datasets/` | Dataset *manifests* only. The JSONL corpora are regenerable and intentionally not committed |
@@ -70,9 +96,38 @@ scripts\run-train.cmd --tag my-pilot --epochs 3
 python scripts\export_model.py --adapter my-pilot --name my-pilot --gguf f16,q4_k_m
 python scripts\verify_export.py --model exports\my-pilot
 
+# 4b. Or bring in an external dataset — plan it before you pay for it
+python scripts\hf_datasets.py --queue-plan --remote        # what would run, how big
+python scripts\hf_datasets.py --advance org/name --split full   # pull to G: -> convert -> verify -> fit
+python scripts\hf_datasets.py --queue-run                  # then train each queued dataset
+
 # 5. Dashboard (tailnet or loopback bind)
 powershell -ExecutionPolicy Bypass -File scripts\start-dashboard.ps1 -Port 8091
 ```
+
+## Verification
+
+Three checks run offline, and they are what "verified" means here — all three pass
+on this tree:
+
+```powershell
+python scripts\hf_datasets.py --selftest   # 24 checks: URL parsing, the registry,
+                                           # the drop gate, the queue lock (stale
+                                           # vs live), the stage ladder, the plan
+python scripts\dashboard.py --selftest     # 7 checks: the inline script parses,
+                                           # every id exists, every fetch hits a
+                                           # route `Handler` actually serves
+python scripts\check_no_personal_data.py   # scans what git would publish
+```
+
+`dashboard.py --selftest` exists because of a one-character bug that shipped in the
+first commit: a `\n` inside a JS string literal became a real newline when served,
+the whole `<script>` block died with `Invalid or unexpected token`, and **every
+button on the page was dead** while every panel still rendered. A server-rendered
+page cannot be trusted by eye, so it is asserted. The same reasoning runs through
+the pipeline: state files name the process that wrote them, the queue refuses to
+touch what is in flight, and a dataset whose runner died is reported *stalled*
+rather than assumed alive.
 
 ## Privacy guard
 
