@@ -34,6 +34,10 @@ MODELS = {
         "license_file": "LICENSE-UPSTREAM-LFM.md",
         "context": 32768,
         "chat_template": True,
+        # What a *baseline* export of this model is called (see export_model.py
+        # --base-only): the unmodified base, converted so it can be served the same
+        # way as a fine-tune and compared against one.
+        "export_name": "lfm25-base",
         "notes": ("The student base for every run so far. QLoRA 4-bit with fp16 "
                   "compute (Pascal 1060: no bf16, no flash-attn). Its chat template "
                   "prefills <think> in assistant turns, which is what the corpus "

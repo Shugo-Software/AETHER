@@ -430,7 +430,7 @@ def _gguf_ok(path, ref_bytes):
     return True, "%s" % _size(size)
 
 
-def to_gguf(out_dir, quants, state, imatrix=None):
+def to_gguf(out_dir, quants, state, imatrix=None, src_dir=None, base_name=None):
     """Convert merged HF model -> f16 GGUF -> each requested quant.
 
     `quants` is a list of QUANT_TYPES keys; empty = leave GGUF alone. The f16
@@ -449,7 +449,7 @@ def to_gguf(out_dir, quants, state, imatrix=None):
             "  Set AETHER_LLAMA_CPP_SRC to a llama.cpp checkout, or place one at "
             "%s (see README quickstart)." % (CONVERT, LLAMA_SRC))
     state.write("converting", stage="gguf")
-    base = os.path.basename(out_dir)
+    base = base_name or os.path.basename(out_dir)
     f16 = os.path.join(out_dir, "%s-f16.gguf" % base)
     for stale in glob.glob(os.path.join(out_dir, "*.part")):
         # A previous pass died mid-write; say so and drop it rather than let it
@@ -473,7 +473,7 @@ def to_gguf(out_dir, quants, state, imatrix=None):
                                   capture_output=True, text=True).stdout
         if "--trust-remote-code" in help_txt:
             cmd.append("--trust-remote-code")
-        cmd.append(out_dir)
+        cmd.append(src_dir or out_dir)
         print("[export] gguf f16:", " ".join(cmd), flush=True)
         subprocess.run(cmd, check=True, env=_hf_env())
         good, why = _gguf_ok(tmp, 0)
@@ -606,8 +606,13 @@ def push_hub(out_dir, repo, public, state, gguf_repo=None):
 
 def main():
     ap = argparse.ArgumentParser(description="AETHER model export")
-    ap.add_argument("--adapter", required=True,
-                    help="adapter name under adapters/ or a path")
+    ap.add_argument("--adapter", required=False,
+                    help="adapter name under adapters/ or a path (required unless "
+                         "--base-only)")
+    ap.add_argument("--base-only", action="store_true",
+                    help="convert the base model itself to GGUF, with no adapter: a "
+                         "local baseline to compare a fine-tune against. Refuses "
+                         "--hub (the base is not ours to publish)")
     ap.add_argument("--model", default=None,
                     help="base model to merge onto (default: %s). Must match the "
                          "base the adapter was trained on — this script refuses "
@@ -640,6 +645,58 @@ def main():
     ap.add_argument("--public", action="store_true",
                     help="make the HF repo public (default private)")
     args = ap.parse_args()
+    global STUDENT          # declared once, before any branch uses the name
+
+    if args.base_only:
+        # A *baseline*: the base model itself, converted and quantized so it can be
+        # served through the same llama.cpp path as any fine-tune. That is what makes
+        # "did the training actually do anything?" measurable — and it is deliberately
+        # not a release: no adapter, no model card, and pushing is refused, because the
+        # base is somebody else's work under their licence.
+        # (STUDENT is declared global earlier in main() — one declaration per name.)
+        STUDENT = am.resolve(args.model)
+        if args.hub:
+            raise SystemExit(
+                "--base-only makes a local baseline, not a release. Publishing the "
+                "base under our name would misstate whose work it is and under which "
+                "licence — drop --hub (use --adapter for a release export).")
+        about = am.info(STUDENT)
+        name = (args.name or about.get("export_name")
+                or (STUDENT.split("/")[-1].lower() + "-base")).strip()
+        if not name or os.path.basename(name) != name:
+            raise SystemExit("--name must be a bare slug (no separators): %r" % name)
+        quants = [q.strip() for q in (args.gguf or "f16,q4_k_m").split(",")
+                  if q.strip()]
+        bad = [q for q in quants if q not in QUANT_TYPES]
+        if bad:
+            raise SystemExit("unknown quant type(s): %s (one of: %s)"
+                             % (", ".join(bad), ", ".join(sorted(QUANT_TYPES))))
+        out_dir = args.out or os.path.join(EXPORTS, name)
+        state = State(name, out_dir)
+        from huggingface_hub import snapshot_download
+        print("[export] base model: %s" % am.describe(STUDENT), flush=True)
+        src = snapshot_download(repo_id=STUDENT)
+        print("[export] local base files: %s" % src, flush=True)
+        files = to_gguf(out_dir, quants, state, imatrix=args.imatrix,
+                        src_dir=src, base_name=name)
+        manifest = {"name": name, "title": (args.title or name.replace("-", " ")),
+                    "kind": "base-baseline",
+                    "purpose": ("local verification baseline: the unmodified base, "
+                                "served exactly as a fine-tune is, so a comparison "
+                                "has something to compare against. Not a release."),
+                    "base_model": STUDENT, "adapter": None, "merged_utc": _now(),
+                    "dtype": "fp16", "license": about.get("license"),
+                    "license_url": about.get("license_url"),
+                    "gguf": [os.path.basename(f) for f in files],
+                    "gguf_repo": None, "hub_url": None}
+        os.makedirs(out_dir, exist_ok=True)
+        with open(os.path.join(out_dir, "export-manifest.json"), "w",
+                  encoding="utf-8") as fh:
+            json.dump(manifest, fh, indent=2, ensure_ascii=False)
+        state.write("done", files=manifest["gguf"])
+        print("[export] base baseline -> %s (%s)"
+              % (out_dir, ", ".join(manifest["gguf"])), flush=True)
+        return 0
 
     adapter_dir = args.adapter
     if not os.path.isdir(adapter_dir):
@@ -651,7 +708,6 @@ def main():
     # Which base was *this* adapter trained on? The adapter itself is the authority.
     # Merging a LoRA onto a different base runs without error and produces a model
     # that is quietly wrong, so the mismatch is refused rather than warned about.
-    global STUDENT
     STUDENT = am.resolve(args.model)
     trained_on = ""
     try:
