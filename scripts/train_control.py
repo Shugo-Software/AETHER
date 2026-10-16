@@ -127,7 +127,14 @@ def _alive_and_ours(pid):
 
 
 def active_run():
-    """The active training run if it's still alive+ours, else None (self-heals)."""
+    """Any live training run — ours or the queue's — else None (self-heals).
+
+    This used to read only train-active.json, the record *this* module writes. A run
+    the queue started (hf_datasets.train -> recursive_train.py) therefore showed as
+    no run at all: the Stop button stayed disabled while Start would have launched a
+    second trainer onto the card the loop's trainer already occupied (2026-10-15).
+    run_state resolves every launcher's record through the process table.
+    """
     rec = _read_active()
     if rec and _alive_and_ours(rec.get("pid")):
         return rec
@@ -136,7 +143,36 @@ def active_run():
             os.remove(ACTIVE_PATH)
         except OSError:
             pass
-    return None
+    try:
+        import run_state
+        st = run_state.active()
+    except Exception:  # noqa: BLE001 — the control plane must never break
+        return None
+    p = st.get("primary")
+    if not p:
+        return None
+    return {"pid": p["pid"], "tag": p.get("tag"), "dataset": p.get("dataset"),
+            "started_utc": p.get("started_utc"), "role": p["role"],
+            "source": p["source"], "repo": p.get("repo"), "log": p.get("log"),
+            "corpus": p.get("corpus"), "tree": p.get("tree"),
+            "cmdline": p.get("cmdline")}
+
+
+def describe_run(rec):
+    """One line naming a live run ("loop pid=25480 tag=… (queue training)").
+
+    Shared by the start/stop messages and the dashboard's control panel, so a user
+    can always tell *what* is running and who started it.
+    """
+    if not rec:
+        return "nothing running"
+    bits = "%s pid=%s" % (rec.get("role") or "run", rec.get("pid"))
+    for key, label in (("tag", "tag"), ("repo", "repo")):
+        if rec.get(key):
+            bits += " %s=%s" % (label, rec[key])
+    if rec.get("source"):
+        bits += " (%s)" % rec["source"]
+    return bits
 
 
 def _num(cfg, key, default, cast):
@@ -150,8 +186,13 @@ def start_training(cfg):
     """Validate + launch train_student.py. Returns (ok, payload)."""
     if not isinstance(cfg, dict):
         return False, {"error": "expected a JSON object"}
-    if active_run():
-        return False, {"error": "a training run is already active — stop it first"}
+    live = active_run()
+    if live:
+        # Name it: it may be a queue/loop run this module never launched, which is
+        # exactly the case that used to let a second trainer start on a busy card.
+        return False, {"error": "already running — %s. Stop it first."
+                                % describe_run(live),
+                       "active": live}
 
     dataset = (cfg.get("dataset") or "").strip()
     if not dataset:
@@ -231,8 +272,14 @@ def start_training(cfg):
     return True, rec
 
 
-def stop_training():
-    """Stop the active run (only if its cmdline still names train_student.py)."""
+def stop_training(dry_run=False):
+    """Stop the live training run, whoever started it.
+
+    One code path decides what "our job" means: run_state verifies the pid's command
+    line and kills the whole subtree (the loop, its trainer and their workers). The
+    old version only knew train-active.json, so a queue-started run could not be
+    stopped from the UI at all.
+    """
     rec = active_run()
     if not rec:
         stale = _read_active()
@@ -244,17 +291,31 @@ def stop_training():
             return True, {"stopped": False, "note": "run already finished"}
         return True, {"stopped": False, "note": "no active run"}
     pid = int(rec["pid"])
-    if TRAINER_MARKER not in _cmdline(pid):
-        return False, {"error": "PID %d is not our trainer — refusing to kill" % pid}
     try:
-        subprocess.run(["taskkill", "/F", "/T", "/PID", str(pid)],
-                       capture_output=True, timeout=20)
-    except Exception as e:  # noqa: BLE001
-        return False, {"error": "taskkill failed: %s" % e}
-    try:
-        os.remove(ACTIVE_PATH)
-    except OSError:
-        pass
-    return True, {"stopped": True, "pid": pid, "tag": rec.get("tag")}
+        import run_state
+        res = run_state.stop(rec, dry_run=dry_run)
+        res.setdefault("tag", rec.get("tag"))
+        if not res.get("ok"):
+            return False, res
+        if dry_run:
+            return True, res
+        try:
+            os.remove(ACTIVE_PATH)
+        except OSError:
+            pass
+        return True, res
+    except Exception:  # noqa: BLE001 — fall back to the narrow, marker-checked kill
+        if TRAINER_MARKER not in _cmdline(pid):
+            return False, {"error": "PID %d is not our trainer — refusing to kill" % pid}
+        try:
+            subprocess.run(["taskkill", "/F", "/T", "/PID", str(pid)],
+                           capture_output=True, timeout=20)
+        except Exception as e:  # noqa: BLE001
+            return False, {"error": "taskkill failed: %s" % e}
+        try:
+            os.remove(ACTIVE_PATH)
+        except OSError:
+            pass
+        return True, {"stopped": True, "pid": pid, "tag": rec.get("tag")}
 
 

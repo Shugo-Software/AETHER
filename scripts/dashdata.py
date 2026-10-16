@@ -506,12 +506,18 @@ def training_status(state_file=None, tag=None, runs=None):
 
 
 def control_state():
-    """Training-control panel data: dataset list + adapters + active run."""
+    """Training-control panel data: dataset list + adapters + active run.
+
+    `active` can be a run this module never launched — the queue's loop, a sweep —
+    so the panel also gets a description naming the role, tag and repo. That is what
+    makes Stop a legible button instead of a mystery, and Start's refusal readable.
+    """
     import train_control as tc
     active = tc.active_run()
     return {'datasets': tc.list_datasets(),
             'adapters': tc.list_adapters(),
             'active': active,
+            'describe': tc.describe_run(active),
             'can_start': active is None}
 
 

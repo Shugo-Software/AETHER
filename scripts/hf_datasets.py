@@ -1028,6 +1028,11 @@ def main():
                     help="mark learned_verified if the gate passed")
     ap.add_argument("--drop", metavar="REF", help="delete the local copy")
     ap.add_argument("--advance", metavar="REF", help="pull+convert+verify+fit")
+    ap.add_argument("--stop", metavar="REF", nargs="?", const="",
+                    help="stop the running job, or one dataset's job (keeps the "
+                         "files; the queue self-heals on its next pass)")
+    ap.add_argument("--dry-run", action="store_true",
+                    help="with --stop: say what would be stopped, kill nothing")
     ap.add_argument("--queue-run", action="store_true",
                     help="process every queued dataset end to end")
     ap.add_argument("--queue-plan", action="store_true",
@@ -1181,6 +1186,10 @@ def main():
         else:
             print("[hf] queue is fully runnable")
         return 0 if plan["runnable"] else 1
+    if a.stop is not None:
+        res = stop(a.stop or None, dry_run=a.dry_run)
+        print("[hf] %s" % json.dumps(res, ensure_ascii=False))
+        return 0 if res.get("ok") else 1
     if a.queue_run:
         # Recorded like any other job so the dashboard's Pipeline jobs table can
         # see a queue run started from a console (its log is wherever the caller
@@ -1248,8 +1257,11 @@ def main():
 
 
 JOBS_PATH = os.path.join(LOGS, "hf-jobs.json")
+# Verbs the dashboard may POST to /api/hf/run. `stop` is in the list so the route
+# validates it like the others, but it is handled inline (it must answer with what
+# it stopped, not spawn a detached child that reports nothing).
 JOBS = ["add", "pull", "convert", "verify", "fit", "rewrite", "train",
-        "learned_verified", "drop", "advance", "queue_run"]
+        "learned_verified", "drop", "advance", "queue_run", "stop"]
 
 
 def _load_jobs():
@@ -1458,6 +1470,59 @@ def spawn(action, repo=None, **kw):
                                 stderr=subprocess.STDOUT,
                                 creationflags=0x00000200)  # detached
     return _record_job(action, repo, proc.pid, log_path, cmd)
+
+
+def stop(repo=None, dry_run=False, log=print):
+    """Stop the running job — a queue job, a loop iteration, or any training.
+
+    The queue can start a 289 GB pull, a conversion or a multi-hour loop, and the UI
+    had no way to end one: the only stop control belonged to train_control, which
+    knew nothing about queue-started runs, so the answer was Task Manager. This
+    resolves the target through run_state (marker-checked, whole subtree), keeps the
+    downloaded files, and leaves the registry row to the queue's own self-heal.
+
+    Returns a report dict; `ok` is False only when a kill was refused or failed.
+    """
+    import run_state
+    data = load_registry()
+    if repo:
+        repo = resolve_repo(repo)
+        e = entry_of(data, repo) or {}
+        job = live_job_for(repo)
+        pid = (job or {}).get("pid") or e.get("loop_pid")
+        if not pid:
+            return {"ok": True, "stopped": False, "repo": repo,
+                    "note": "no live job for %s" % repo}
+        rec = {"pid": int(pid), "role": (job or {}).get("action") or "loop",
+               "tag": e.get("tag"), "repo": repo}
+    else:
+        rec = run_state.active().get("primary")
+        if not rec:
+            # A job the process table knows but no state file names (a pull, a
+            # convert): take the newest live entry from the job feed.
+            live = [j for j in _load_jobs() if pid_alive(j.get("pid"))]
+            if not live:
+                return {"ok": True, "stopped": False, "note": "nothing running"}
+            newest = live[-1]
+            rec = {"pid": int(newest["pid"]), "role": newest.get("action"),
+                   "repo": newest.get("repo")}
+            repo = newest.get("repo")
+    was = (entry_of(data, repo) or {}).get("state") if repo else None
+    res = run_state.stop(rec, dry_run=dry_run)
+    if res.get("stopped") and repo:
+        try:
+            upsert(data, repo,
+                   note="stopped by operator (was %s, pid %s) — files kept"
+                        % (was, rec.get("pid")))
+            save_registry(data)
+        except Exception:  # noqa: BLE001 — the kill happened; never lie about it
+            pass
+    if res.get("stopped"):
+        log("[hf] stopped %s pid=%s%s%s"
+            % (rec.get("role"), rec.get("pid"),
+               (" repo=%s" % repo) if repo else "",
+               " (dry run)" if dry_run else ""))
+    return res
 
 
 def wait_for_pid(pid, poll=30, log=print):

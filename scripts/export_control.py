@@ -43,24 +43,49 @@ def _read_active():
 
 
 def active_export():
-    """The running export if its PID is alive + ours, else None (self-heals)."""
+    """A live export — ours, or the loop's own export stage, else None (self-heals).
+
+    The loop runs export_model.py directly for its export step, so a record this
+    module never wrote could still be an export in progress (same blind spot that
+    hid queue-started training from the Stop button).
+    """
     rec = _read_active()
-    if not rec:
-        return None
-    pid = rec.get("pid")
-    if not pid:
-        return None
-    try:
-        cmdline = tc._cmdline(int(pid))
-    except (TypeError, ValueError):
-        cmdline = ""
-    if EXPORTER_MARKER not in cmdline:  # gone, or PID reused by a foreign process
+    if rec:
+        pid = rec.get("pid")
         try:
+            cmdline = tc._cmdline(int(pid)) if pid else ""
+        except (TypeError, ValueError):
+            cmdline = ""
+        if EXPORTER_MARKER in cmdline:
+            return rec
+        try:      # gone, or the PID was reused by a foreign process
             os.remove(ACTIVE_PATH)
         except OSError:
             pass
+    try:
+        import run_state
+        p = run_state.active().get("primary")
+    except Exception:  # noqa: BLE001 — the control plane must never break
         return None
-    return rec
+    if p and p.get("role") == "export":
+        return {"pid": p["pid"], "adapter": p.get("dataset") or p.get("repo"),
+                "started_utc": p.get("started_utc"), "role": "export",
+                "source": p.get("source"), "tree": p.get("tree")}
+    return None
+
+
+def busy_run():
+    """Anything live that would contend with a new export.
+
+    A merge is CPU-only, but imatrix/quantize need the card — and the loop's trainer
+    may be holding it. Refusing with the reason beats a silent OOM later.
+    """
+    try:
+        import run_state
+        p = run_state.active().get("primary")
+    except Exception:  # noqa: BLE001
+        return None
+    return p if p and p.get("role") != "export" else None
 
 
 def start_export(cfg):
@@ -69,6 +94,12 @@ def start_export(cfg):
         return False, {"error": "expected a JSON object"}
     if active_export():
         return False, {"error": "an export is already running — stop it first"}
+    busy = busy_run()
+    if busy:
+        return False, {"error": "busy — %s. Stop it first (a merge is CPU-only but "
+                                "imatrix/quantize need the card)."
+                                % tc.describe_run(busy),
+                       "active": busy}
 
     adapter = (cfg.get("adapter") or "").strip()
     if (os.path.basename(adapter) != adapter or not tc._TAG_RE.match(adapter)
@@ -125,9 +156,13 @@ def start_export(cfg):
     return True, rec
 
 
-def stop_export():
-    """Stop the running export (only if cmdline still names export_model.py)."""
-    rec = _read_active()
+def stop_export(dry_run=False):
+    """Stop the live export — ours, or an export the loop started.
+
+    Same single decision path as train_control.stop_training: run_state verifies the
+    command line and kills the subtree.
+    """
+    rec = active_export()
     if not rec:
         try:
             os.remove(ACTIVE_PATH)
@@ -135,15 +170,27 @@ def stop_export():
             pass
         return True, {"stopped": False, "note": "no active export"}
     pid = int(rec["pid"])
-    if EXPORTER_MARKER not in tc._cmdline(pid):
-        return False, {"error": "PID %d is not our exporter — refusing to kill" % pid}
     try:
-        subprocess.run(["taskkill", "/F", "/T", "/PID", str(pid)],
-                       capture_output=True, timeout=20)
-    except Exception as e:  # noqa: BLE001
-        return False, {"error": "taskkill failed: %s" % e}
-    try:
-        os.remove(ACTIVE_PATH)
-    except OSError:
-        pass
-    return True, {"stopped": True, "pid": pid, "adapter": rec.get("adapter")}
+        import run_state
+        res = run_state.stop(rec, dry_run=dry_run)
+        res.setdefault("adapter", rec.get("adapter"))
+        if not res.get("ok") or dry_run:
+            return bool(res.get("ok")), res
+        try:
+            os.remove(ACTIVE_PATH)
+        except OSError:
+            pass
+        return True, res
+    except Exception:  # noqa: BLE001 — narrow, marker-checked fallback
+        if EXPORTER_MARKER not in tc._cmdline(pid):
+            return False, {"error": "PID %d is not our exporter — refusing to kill" % pid}
+        try:
+            subprocess.run(["taskkill", "/F", "/T", "/PID", str(pid)],
+                           capture_output=True, timeout=20)
+        except Exception as e:  # noqa: BLE001
+            return False, {"error": "taskkill failed: %s" % e}
+        try:
+            os.remove(ACTIVE_PATH)
+        except OSError:
+            pass
+        return True, {"stopped": True, "pid": pid, "adapter": rec.get("adapter")}

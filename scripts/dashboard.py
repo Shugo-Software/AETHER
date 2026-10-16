@@ -299,6 +299,9 @@ def _queue_panel(snap):
              'placeholder="https://huggingface.co/datasets/org/name"></label>')
     h.append('<button class="act start" id="queue-add-btn">Add</button>')
     h.append('<button class="act" id="queue-plan-btn">Plan queue</button>')
+    h.append('<button class="act stop" id="queue-stop-btn" '
+             'title="stop the job the queue is running right now (files are kept; '
+             'the queue resumes the row on its next pass)">Stop running job</button>')
     h.append('</div><div id="queue-status"></div>'
              '<pre id="queue-plan" style="display:none"></pre>')
     h.append('</div>')
@@ -339,6 +342,11 @@ def _queue_panel(snap):
         skip_act = 'unskip' if it.get('state') == 'skipped' else 'skip'
         h.append('<button class="hfrow" data-qact="%s" data-repo="%s"%s%s>%s</button>'
                  % (skip_act, html.escape(str(it.get('id'))), dis, tip, skip_label))
+        if it.get('active'):
+            # The row the pipeline is working on right now: the one place a stop
+            # must be reachable. run_state decides the pid; files are kept.
+            h.append('<button class="hfrow" data-act="stop" data-repo="%s">stop</button>'
+                     % html.escape(str(it.get('id'))))
         h.append('</td></tr>')
     h.append('</table>')
     return h
@@ -925,11 +933,16 @@ function applyControl(c){
   var msg=document.getElementById('ctl-status'); if(!st||!sp||!msg)return;
   if(c.active){
     st.disabled=true; sp.disabled=false;
-    msg.innerHTML='<span class="active">training</span> tag='+(c.active.tag||'?')+
-      ' pid='+c.active.pid+' dataset='+(c.active.dataset||'?')+' since '+(c.active.started_utc||'');
+    // Name what is running, whoever launched it (the queue's loop included), and
+    // build it with textContent so a repo name can never inject markup.
+    msg.textContent='';
+    var a=document.createElement('span'); a.className='active';
+    a.textContent=c.describe||('running pid='+c.active.pid);
+    msg.appendChild(a);
+    if(c.active.started_utc){msg.appendChild(document.createTextNode(' since '+c.active.started_utc));}
   }else{
     st.disabled=false; sp.disabled=true;
-    msg.textContent=c.can_start?'idle — pick a dataset and press Start':'busy…';
+    msg.textContent=c.describe||(c.can_start?'idle — pick a dataset and press Start':'busy…');
   }
 }
 function ctlMsg(t,ok){var m=document.getElementById('ctl-status');
@@ -1122,6 +1135,8 @@ document.addEventListener('DOMContentLoaded',function(){
   if(qa)qa.addEventListener('click',function(){hfQueue('add');});
   var qp=document.getElementById('queue-plan-btn');
   if(qp)qp.addEventListener('click',hfPlan);
+  var qs=document.getElementById('queue-stop-btn');
+  if(qs)qs.addEventListener('click',function(){hfRun('stop');});
   poll(); setInterval(poll,5000);
 });
 </script>
@@ -1139,6 +1154,16 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
+
+    def _json_body(self):
+        """The POST body as a dict, {} when empty, None when unparseable."""
+        length = int(self.headers.get("Content-Length", 0) or 0)
+        raw = self.rfile.read(length) if length else b"{}"
+        try:
+            cfg = json.loads(raw or b"{}")
+        except ValueError:
+            return None
+        return cfg if isinstance(cfg, dict) else None
 
     def _asset(self, name):
         """Serve a file from assets/ (logo/icons). Basename-only, no traversal."""
@@ -1211,8 +1236,14 @@ class Handler(BaseHTTPRequestHandler):
                 ok, payload = tc.start_training(cfg)
             self._json(200 if ok else 409, dict(payload, ok=ok))
         elif self.path == "/api/train/stop":
+            # Optional {"dry_run": true} answers "what would this stop?" without
+            # stopping it — how the control plane is verified against a live run.
+            cfg = self._json_body()
+            if cfg is None:
+                self._json(400, {"ok": False, "error": "invalid JSON body"})
+                return
             with _CTL_LOCK:
-                ok, payload = tc.stop_training()
+                ok, payload = tc.stop_training(dry_run=bool(cfg.get("dry_run")))
             self._json(200 if ok else 409, dict(payload, ok=ok))
         elif self.path == "/api/export/start":
             import export_control as ec
@@ -1228,8 +1259,12 @@ class Handler(BaseHTTPRequestHandler):
             self._json(200 if ok else 409, dict(payload, ok=ok))
         elif self.path == "/api/export/stop":
             import export_control as ec
+            cfg = self._json_body()
+            if cfg is None:
+                self._json(400, {"ok": False, "error": "invalid JSON body"})
+                return
             with _CTL_LOCK:
-                ok, payload = ec.stop_export()
+                ok, payload = ec.stop_export(dry_run=bool(cfg.get("dry_run")))
             self._json(200 if ok else 409, dict(payload, ok=ok))
         elif self.path == "/api/hf/queue":
             # Queue editing: reorder / skip / add. The pipeline refuses changes to
@@ -1285,6 +1320,15 @@ class Handler(BaseHTTPRequestHandler):
             if action not in hf.JOBS:
                 self._json(400, {"ok": False,
                                  "error": "unknown action %r" % action})
+                return
+            if action == "stop":
+                # Inline, not spawned: the caller must be told *what* was stopped,
+                # and run_state (not a detached child) decides the target. Optional
+                # {"dry_run": true} answers without killing anything.
+                with _CTL_LOCK:
+                    res = hf.stop(cfg.get("repo") or None,
+                                  dry_run=bool(cfg.get("dry_run")), log=lambda *_: None)
+                self._json(200 if res.get("ok") else 409, res)
                 return
             with _CTL_LOCK:
                 try:
@@ -1346,7 +1390,7 @@ def _selftest_snapshot():
                             "free_human": "0 B", "orphans": []}},
         "export": {"active": None, "status": None, "log_tail": []},
         "control": {"datasets": [], "adapters": [], "active": None,
-                    "can_start": True},
+                    "describe": "nothing running", "can_start": True},
     }
 
 
