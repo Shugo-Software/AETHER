@@ -1,0 +1,30 @@
+{
+ "tool": "scripts/fit_corpus.py",
+ "input": {
+  "path": "datasets\\minimax-m2-1-code-sft.jsonl",
+  "sha256": "dcaf3f8c6642da5f38dbaf6719b9abd7c8ebfef79e4395c0221834e37d4e65f1",
+  "rows": 654
+ },
+ "output": {
+  "path": "datasets\\minimax-m2-1-code-sft-fit.jsonl",
+  "rows": 654
+ },
+ "policy": {
+  "max_len": 1536,
+  "max_per_prompt": 4,
+  "min_answer_tokens": 24,
+  "holdout": "datasets\\phase6_pilot1.jsonl",
+  "holdout_prompts": 60
+ },
+ "dropped": {
+  "prompt_too_long": 0,
+  "anchor_holdout": 0,
+  "answer_too_short_after_trim": 0,
+  "duplicate_cap": 0
+ },
+ "trimmed_rows": 1,
+ "estimated_full_row_tokens": {
+  "in": 564155,
+  "out": 564097
+ }
+}
