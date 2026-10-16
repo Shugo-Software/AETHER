@@ -55,7 +55,28 @@ def _now():
 
 
 def list_datasets():
-    """[{file, samples, kb}] for the dataset picker (same shape as dashdata)."""
+    """Datasets under datasets/, annotated with what the queue knows about them.
+
+    This picker used to be a bare file list, which made "Start training" and the
+    dataset queue look like two unrelated features: a corpus the queue was training
+    could be started here as well (two trainers, one corpus), a *converted* corpus
+    whose answers do not fit could be picked as if it were the fitted one, and
+    nothing said whether the queue knew the file at all. The queue's own view is
+    attached here, so both panels describe one dataset the same way.
+    """
+    by_file, items, nxt = {}, {}, None
+    try:
+        import hf_datasets as hf
+        data = hf.load_registry()
+        for e in data["datasets"]:
+            for key in ("fitted", "corpus"):
+                if e.get(key):
+                    by_file[os.path.basename(e[key])] = e
+        items = {it["id"]: it for it in hf.queue_items(data)}
+        pend = hf.queue_pending(data)
+        nxt = pend[0]["id"] if pend else None
+    except Exception:  # noqa: BLE001 — the picker renders even with no queue at all
+        pass
     out = []
     for path in sorted(glob.glob(os.path.join(DATASETS, "*.jsonl"))):
         n = 0
@@ -66,8 +87,30 @@ def list_datasets():
                         n += 1
         except OSError:
             pass
-        out.append({"file": os.path.basename(path), "samples": n,
-                    "kb": round(os.path.getsize(path) / 1024, 1)})
+        name = os.path.basename(path)
+        entry = by_file.get(name) or {}
+        repo = entry.get("id")
+        it = items.get(repo) or {}
+        fitted = entry.get("fitted") or ""
+        kind = ("fitted" if fitted and os.path.basename(fitted) == name
+                else "converted" if repo else None)
+        # Two health blocks describe two different files: health_fitted is the artifact
+        # a run trains on, health is the converted corpus it was made from. Mixing them
+        # labels a clean fitted corpus with its input's problems (seen live: the fitted
+        # starcoderdata file showed the converted file's 3 answer-cut rows).
+        health = (entry.get("health_fitted") if kind == "fitted"
+                  else entry.get("health")) or {}
+        out.append({"file": name, "samples": n,
+                    "kb": round(os.path.getsize(path) / 1024, 1),
+                    "repo": repo,
+                    "in_queue": repo in items,
+                    "kind": kind,
+                    "queue_pos": (it["pos"] + 1) if it else None,
+                    "state": it.get("state"),
+                    "next_step": it.get("next_step"),
+                    "is_next": bool(repo) and repo == nxt,
+                    "locked": bool(it.get("locked")),
+                    "answer_cut": health.get("answer_cut")})
     return out
 
 
@@ -203,6 +246,34 @@ def start_training(cfg):
             or not os.path.exists(ds_path):
         return False, {"error": "unknown dataset: %r" % dataset}
 
+    # Which queue row is this file? The two features must tell one story. Starting a
+    # run here is recorded in the dataset registry the same way the queue records its
+    # own runs (state + owner pid), which is what makes the queue panel show the row
+    # as active, makes queue_run wait instead of starting a second runner, and lets
+    # the queue's self-heal put the row back in play when this pid dies.
+    repo, entry, warn = "", {}, ""
+    try:
+        import hf_datasets as hf
+        for e in hf.load_registry()["datasets"]:
+            for key in ("fitted", "corpus"):
+                if e.get(key) and os.path.basename(e[key]) == dataset:
+                    repo, entry = e["id"], e
+        if entry:
+            fitted = entry.get("fitted") or ""
+            health = entry.get("health_fitted") or entry.get("health") or {}
+            if fitted and os.path.basename(fitted) != dataset:
+                warn = ("%s is the converted corpus, not the fitted one (%s) — the "
+                        "queue trains the fitted file"
+                        % (dataset, os.path.basename(fitted)))
+            elif not fitted:
+                warn = ("%s has no fitted corpus yet; the queue would pull, convert, "
+                        "verify and fit it first" % dataset)
+            elif (health.get("answer_cut") or 0) > 0:
+                warn = ("%s of %s rows lose their answer at max_len — re-fit it before "
+                        "training on it" % (health["answer_cut"], dataset))
+    except Exception:  # noqa: BLE001 — a registry problem must not block training
+        pass
+
     tag = (cfg.get("tag") or "").strip()
     if not _TAG_RE.match(tag):
         return False, {"error": "tag must match [A-Za-z0-9][A-Za-z0-9._-]*"}
@@ -280,6 +351,24 @@ def start_training(cfg):
                    "grad_accum": grad_accum, "max_steps": max_steps,
                    "resume": resume or None, "out": out or None}}
     _write_active(rec)
+    # One truth about what is training: record the run in the dataset registry too,
+    # exactly as hf_datasets.train() does for the queue's own iterations.
+    if repo:
+        try:
+            import hf_datasets as hf
+            data = hf.load_registry()
+            hf.upsert(data, repo, state="training", tag=tag, loop_pid=proc.pid,
+                      pid=proc.pid,
+                      adhoc={"utc": rec["started_utc"], "tag": tag, "corpus": dataset,
+                             "by": "dashboard training panel"},
+                      note=("ad-hoc training started from the dashboard (tag %s) on %s — "
+                            "training only: the loop's export/serve/review/gate are "
+                            "still owed" % (tag, dataset)))
+            hf.save_registry(data)
+        except Exception as e:  # noqa: BLE001 — never fail a launched run on bookkeeping
+            print("[train] could not record this run in the dataset registry: %s" % e)
+    if warn:
+        rec["warn"] = warn
     return True, rec
 
 

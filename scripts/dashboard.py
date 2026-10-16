@@ -556,8 +556,26 @@ def render(snap):
     h.append('<div class="card"><div class="ctl">')
     h.append('<label>dataset<select id="ctl-dataset">')
     for d in ctrl.get("datasets", []):
-        h.append('<option value="%s">%s (%s samples)</option>'
-                 % (html.escape(d["file"]), html.escape(d["file"]), d["samples"]))
+        # Say what the queue thinks of this file: whether it knows it, where it sits
+        # in the queue, whether it is the fitted artifact, and whether anything is
+        # already training on it. "Start training" and the queue are one workflow.
+        marks = []
+        if d.get("is_next"):
+            marks.append("NEXT in queue")
+        elif d.get("in_queue"):
+            marks.append("queue #%s" % d.get("queue_pos"))
+        if d.get("kind") and d["kind"] != d.get("state"):
+            marks.append(d["kind"])
+        if d.get("state"):
+            marks.append(d["state"])
+        if d.get("answer_cut"):
+            marks.append("%s rows lose their answer" % d["answer_cut"])
+        if d.get("locked"):
+            marks.append("locked — training now")
+        h.append('<option value="%s">%s (%s samples)%s</option>'
+                 % (html.escape(d["file"]), html.escape(d["file"]), d["samples"],
+                    " &mdash; " + " &middot; ".join(marks) if marks
+                    else " &mdash; not in the queue"))
     h.append("</select></label>")
     ctl = snap.get('control') or {}
     h.append('<label>student model<select id="ctl-model">')
@@ -582,6 +600,16 @@ def render(snap):
     h.append('<button class="act stop" id="ctl-stop" disabled>Stop training</button>')
     h.append("</div>")
     h.append('<div id="ctl-status">idle — pick a dataset and press Start</div>')
+    h.append('<div class="small" style="margin-top:6px">Start trains this one corpus '
+             'in place (no export, serve, review or gate). The queue\'s <b>Run '
+             'queue</b> walks a dataset end to end &mdash; pull &rarr; convert &rarr; '
+             'verify &rarr; fit &rarr; train &rarr; gate &mdash; and the row marked '
+             '<b>NEXT in queue</b> is what it would pick up. A dataset started here is '
+             'recorded in the queue as <b>training</b> with this run\'s pid, so the '
+             'queue waits for it instead of starting a second trainer on the same '
+             'corpus. When this run ends, the queue sees the row as stalled at its '
+             'fitted stage and the loop trains it again end to end (so it gets the '
+             'gate this panel does not run).</div>')
     h.append("</div>")
 
     # Dataset queue (its own section: order, next step, reorder/skip)
@@ -986,7 +1014,7 @@ function startTrain(){
   ctlMsg('starting…',true);
   fetch('/api/train/start',{method:'POST',headers:{'Content-Type':'application/json'},
     body:JSON.stringify(body)}).then(function(r){return r.json();}).then(function(o){
-    if(o.ok){ctlMsg('started pid='+o.pid+' tag='+o.tag+' — watch the panels below',true);}
+    if(o.ok){ctlMsg('started pid='+o.pid+' tag='+o.tag+(o.warn?(' — ⚠ '+o.warn):' — watch the panels below'),!o.warn);}
     else{ctlMsg('error: '+(o.error||'failed'),false);} poll();
   }).catch(function(e){ctlMsg('request failed: '+e,false);});
 }
