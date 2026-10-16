@@ -532,39 +532,58 @@ def _drop_reason(dropped):
     return "; ".join(bits)
 
 
+def _health_of(corpus, tag, max_len, anchor="datasets/phase6_pilot1.jsonl",
+               suffix=""):
+    """Measure one corpus with verify_dataset.py; return (health, report_path).
+
+    Same keys for the converted corpus and the fitted one, plus `file` (which of the
+    two was measured) and the rewrite counts. That pairing is the point: a fitted
+    corpus's `answer_cut: 0` only says something next to the number for the input it
+    was fitted from — the converted corpus is what fitting had to *fix*, the fitted
+    one is what the run actually trains on.
+    """
+    report = os.path.join(LOGS, "verify-dataset-%s%s.json" % (tag, suffix))
+    cmd = [PY, "-u", os.path.join(SCRIPTS, "verify_dataset.py"),
+           "--jsonl", corpus, "--max-len", str(max_len), "--json", report]
+    anchor_path = os.path.join(ROOT, anchor)
+    if os.path.isfile(anchor_path):
+        cmd += ["--overlap", anchor_path]
+    subprocess.run(cmd, cwd=ROOT, env=cache_env())
+    rep = {}
+    try:
+        with open(report, encoding="utf-8") as fh:
+            rep = json.load(fh)
+    except (OSError, ValueError):
+        rep = {}
+    t = rep.get("tokens") or {}
+    cnt = rep.get("counts") or (t.get("tokens") or {})
+    dup = rep.get("duplicates") or {}
+    over = rep.get("overlap") or {}
+    rw = t.get("rewrites") or {}
+    return ({"rows": t.get("rows"), "max_len": t.get("max_len"),
+             "file": os.path.relpath(corpus, ROOT),
+             "classes": t.get("classes"),
+             "answer_cut": (t.get("classes") or {}).get("answer_cut"),
+             "prompt_trimmed": rw.get("prompt"),
+             "answer_trimmed": rw.get("answer"),
+             "terminator_pct": t.get("terminator_pct"),
+             "answer_token_share": cnt.get("answer_loss_share"),
+             "answer_tokens_kept_pct": cnt.get("completion_kept_pct"),
+             "duplicate_groups": dup.get("duplicate_groups"),
+             "anchor_overlap": over.get("shared"),
+             "len_tokens": t.get("len_tokens")}, report)
+
+
 def verify(repo, max_len=1536, anchor="datasets/phase6_pilot1.jsonl", log=print):
     """Measure the corpus with the trainer's own renderer (verify_dataset.py)."""
     data = load_registry()
     e = entry_of(data, repo)
     if not e or not e.get("corpus"):
         raise SystemExit("nothing converted for %s yet" % repo)
-    report = os.path.join(LOGS, "verify-dataset-%s.json" % e.get("tag", "x"))
-    cmd = [PY, "-u", os.path.join(SCRIPTS, "verify_dataset.py"),
-           "--jsonl", e["corpus"], "--max-len", str(max_len),
-           "--json", report]
-    anchor_path = os.path.join(ROOT, anchor)
-    if os.path.isfile(anchor_path):
-        cmd += ["--overlap", anchor_path]
-    log("[hf] $ %s" % " ".join(cmd))
-    proc = subprocess.run(cmd, cwd=ROOT, env=cache_env())
-    try:
-        with open(report, encoding="utf-8") as fh:
-            rep = json.load(fh)
-    except (OSError, ValueError):
-        raise SystemExit("verify produced no report (rc=%d)" % proc.returncode)
-    t = rep.get("tokens", {})
-    cnt = rep.get("counts") or (t.get("tokens") or {})
-    dup = rep.get("duplicates") or {}
-    over = rep.get("overlap") or {}
-    health = {"rows": t.get("rows"), "max_len": t.get("max_len"),
-              "classes": t.get("classes"),
-              "answer_cut": (t.get("classes") or {}).get("answer_cut"),
-              "terminator_pct": t.get("terminator_pct"),
-              "answer_token_share": cnt.get("answer_loss_share"),
-              "answer_tokens_kept_pct": cnt.get("completion_kept_pct"),
-              "duplicate_groups": dup.get("duplicate_groups"),
-              "anchor_overlap": over.get("shared"),
-              "len_tokens": t.get("len_tokens")}
+    log("[hf] verify %s at max_len=%d" % (e["corpus"], max_len))
+    health, report = _health_of(e["corpus"], e.get("tag", "x"), max_len, anchor)
+    if not os.path.isfile(report):
+        raise SystemExit("verify produced no report")
     e = upsert(data, repo, state="verified", health=health,
                verify_report=os.path.relpath(report, ROOT),
                note="verified at max_len=%d" % max_len)
@@ -601,13 +620,23 @@ def fit(repo, max_len=1536, anchor="datasets/phase6_pilot1.jsonl", log=print,
     except (OSError, ValueError):
         pass
     rows = count_rows(out)
+    health, _rep = _health_of(out, e.get("tag", "x"), max_len, anchor, suffix="-fit")
     e = upsert(data, repo, state="fitted", fitted=os.path.relpath(out, ROOT),
                fitted_rows=rows, dropped=(prov.get("dropped") or {}),
                trimmed_rows=prov.get("trimmed_rows"),
-               note="fitted -> %s (%d rows)" % (os.path.basename(out), rows))
+               prompt_trimmed_rows=prov.get("prompt_trimmed_rows"),
+               health_fitted=health,
+               note=("fitted -> %s (%d rows; %d prompt-trimmed, %d answer-trimmed; "
+                     "measured: %s rows, %s answer-cut)"
+                     % (os.path.basename(out), rows,
+                        prov.get("prompt_trimmed_rows") or 0,
+                        prov.get("trimmed_rows") or 0,
+                        health.get("rows"), health.get("answer_cut"))))
     save_registry(data)
-    log("[hf] fitted %s: %d rows (dropped %s)"
-        % (os.path.relpath(out, ROOT), rows, prov.get("dropped")))
+    log("[hf] fitted %s: %d rows (dropped %s) — measured on the fitted file: "
+        "%s rows, %s answer-cut"
+        % (os.path.relpath(out, ROOT), rows, prov.get("dropped"),
+           health.get("rows"), health.get("answer_cut")))
     return e
 
 
