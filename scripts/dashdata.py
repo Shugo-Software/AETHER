@@ -663,6 +663,25 @@ def _corpus_findings(out):
     return warns, notes
 
 
+def _hf_storage():
+    """The pull root's total and orphans — a full os.walk of every local copy.
+
+    Returns None while a pull/advance job is writing that tree: the walk raced the
+    writer and dominated the snapshot (2026-10-16 — starcoderdata alone is 1,729
+    files and 289.5 GB, re-walked every 8 s until the page stopped answering).
+    Per-dataset sizes come from the registry, so only the total and the orphan scan
+    are affected — and neither is worth a blocked dashboard.
+    """
+    try:
+        import hf_datasets as hf
+        for j in hf.jobs():
+            if j.get('running') and j.get('action') in ('pull', 'advance'):
+                return None
+        return hf.storage()
+    except Exception:  # noqa: BLE001 — the panel must never break the page
+        return None
+
+
 def hf_state():
     """Linked Hugging Face datasets: state, disk cost, queue and job feed."""
     try:
@@ -685,29 +704,32 @@ def hf_state():
             'downloads': e.get('downloads'), 'split': e.get('pulled_split'),
             'on_disk': os.path.isdir(e.get('local_dir') or ''),
             'gate': e.get('gate'), 'revision': (e.get('revision') or '')[:8]})
-    st = hf.storage()
+    st = _cached('hf-storage', 300, _hf_storage)
+    stor = ({'root': st['root'], 'total_human': st['total_human'],
+             'free_human': st['free_human'], 'orphans': st['orphans']} if st else
+            {'root': os.path.relpath(hf.DEST_ROOT, hf.ROOT),
+             'total_human': 'not measured (a pull is writing this tree)',
+             'free_human': hf.human(hf.disk_free(hf.DEST_ROOT)), 'orphans': []})
     return {'datasets': items, 'queue': hf.queue_summary(data),
             'items': hf.queue_items(data),
             'jobs': hf.jobs()[:12],
-            'storage': {'root': st['root'], 'total_human': st['total_human'],
-                        'free_human': st['free_human'],
-                        'orphans': st['orphans']}}
+            'storage': stor}
 
 
 def snapshot():
     state_file, tag, runs = _run_files()
     return {'updated_utc': datetime.now(timezone.utc).isoformat(timespec='seconds'),
             'phases': [{'n': n, 'name': name, 'status': s, 'doc': d} for n, name, s, d in PHASES],
-            'gpus': gpu_state(),
+            'gpus': _cached('gpus', 10, gpu_state),
             'host': _cached('host', 10, host_state),
-            'teacher': _cached('teacher', 5, teacher_state),
-            'endpoints': _cached('endpoints', 6, endpoints_state),
+            'teacher': _cached('teacher', 15, teacher_state),
+            'endpoints': _cached('endpoints', 20, endpoints_state),
             'loop': loop_state(runs.get('loop') or _newest(['loop-*.json']),
                                run_tag=tag),
             'run_tag': tag,
-            'datasets': _cached('inventory', 15, dataset_inventory),
+            'datasets': _cached('inventory', 30, dataset_inventory),
             'training': training_status(state_file, tag, runs),
             'corpus': corpus_state(state_file),
-            'hfd': _cached('hfd', 8, hf_state),
+            'hfd': _cached('hfd', 30, hf_state),
             'export': export_state(),
             'control': control_state()}

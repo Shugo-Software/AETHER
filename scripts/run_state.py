@@ -28,6 +28,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -54,6 +55,13 @@ RECORD_FILES = (
 _MATCH = ("recursive_train", "train_student", "train_sweep", "hf_datasets",
           "export_model", "llama-imatrix", "llama-quantize")
 
+# The dashboard polls this every 5 s. An uncached Get-CimInstance over every process
+# is not free, and under the disk load of a multi-GB pull it stalled the snapshot
+# long enough that the page stopped answering (measured 2026-10-16). Display callers
+# take the cached map; a kill forces a fresh one.
+_PROC_TTL = 5.0
+_PROC_CACHE = {"t": 0.0, "procs": None}
+
 
 def _now():
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -67,12 +75,18 @@ def _read_json(path):
         return None
 
 
-def processes(timeout=25):
+def processes(timeout=25, ttl=None):
     """{pid: {ppid, cmdline, name}} for every process that looks like ours.
 
-    One CIM query instead of one per pid: the snapshot polls this, and a per-pid
-    powershell round-trip costs ~0.5 s each.
+    One CIM query instead of one per pid, cached for `_PROC_TTL` seconds (pass
+    `ttl=0` for a fresh scan, as a kill does). The result is shared: treat it as
+    read-only.
     """
+    ttl = _PROC_TTL if ttl is None else ttl
+    started = time.monotonic()
+    if ttl and _PROC_CACHE["procs"] is not None \
+            and (started - _PROC_CACHE["t"]) < ttl:
+        return _PROC_CACHE["procs"]
     pattern = "|".join(_MATCH)
     script = ("Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -match '%s' } "
               "| Select-Object ProcessId,ParentProcessId,Name,CommandLine "
@@ -83,7 +97,7 @@ def processes(timeout=25):
         raw = out.stdout.strip()
         rows = json.loads(raw) if raw else []
     except Exception:  # noqa: BLE001 — a probe must never break the page
-        return {}
+        return _PROC_CACHE["procs"] or {}
     if isinstance(rows, dict):
         rows = [rows]
     procs = {}
@@ -95,6 +109,8 @@ def processes(timeout=25):
         procs[pid] = {"ppid": int(r.get("ParentProcessId") or 0),
                       "cmdline": r.get("CommandLine") or "",
                       "name": r.get("Name") or ""}
+    _PROC_CACHE["t"] = time.monotonic()
+    _PROC_CACHE["procs"] = procs
     return procs
 
 
@@ -243,14 +259,15 @@ def _queue_runner(procs):
 _PRIORITY = ("sweep", "loop", "trainer", "export", "imatrix", "quantize")
 
 
-def active(procs=None, with_state=True):
+def active(procs=None, with_state=True, fresh=False):
     """Everything that is running right now, whatever launched it.
 
     Returns {'primary', 'runs', 'runner', 'updated_utc'}; `primary` is the job a
     Stop should act on (never the queue runner), or None. `with_state=False` uses
-    only the process table (for callers that must stay cheap).
+    only the process table; `fresh=True` re-scans instead of using the 5 s cache
+    (what a kill does before it decides).
     """
-    procs = processes() if procs is None else procs
+    procs = processes(ttl=0 if fresh else None) if procs is None else procs
     runs = _from_records(procs) + (_from_state_files(procs) if with_state else [])
     seen, uniq = set(), []
     for r in runs:
@@ -294,7 +311,7 @@ def stop(rec, dry_run=False, procs=None):
     Refuses (and says so) when the pid no longer names one of our scripts — a
     recycled pid must never be killed because of a stale record.
     """
-    procs = processes() if procs is None else procs
+    procs = processes(ttl=0) if procs is None else procs
     pid = int(rec.get("pid") or 0)
     if not pid:
         return {"ok": False, "error": "no pid to stop"}
