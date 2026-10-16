@@ -513,9 +513,17 @@ def control_state():
     makes Stop a legible button instead of a mystery, and Start's refusal readable.
     """
     import train_control as tc
+    import aether_models as am
     active = tc.active_run()
     return {'datasets': tc.list_datasets(),
             'adapters': tc.list_adapters(),
+            # The selectable students, with the licence each one carries: picking a
+            # base is a decision about the release, so the panel shows where it comes
+            # from rather than a bare id.
+            'models': [{'id': m, 'label': am.MODELS[m].get('label') or m,
+                        'license': am.MODELS[m].get('license')}
+                       for m in sorted(am.MODELS)],
+            'default_model': am.DEFAULT,
             'active': active,
             'describe': tc.describe_run(active),
             'can_start': active is None}

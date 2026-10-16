@@ -207,6 +207,15 @@ def start_training(cfg):
     if not _TAG_RE.match(tag):
         return False, {"error": "tag must match [A-Za-z0-9][A-Za-z0-9._-]*"}
 
+    # Optional: which base model to train. Checked against the registry, because a
+    # typo here would otherwise start a multi-hour run against the wrong base — and
+    # the adapter it writes then refuses to merge anywhere.
+    import aether_models as am
+    model = (cfg.get("model") or "").strip()
+    if model and not am.known(model):
+        return False, {"error": "unknown base model %r — add it to aether_models.py "
+                                "first" % model}
+
     # Optional: adapter dir name. Without it train_student.py uses its legacy
     # adapters/lfm25-<tag>; pass out="jadis-1.0" for a release-style name.
     out = (cfg.get("out") or "").strip()
@@ -238,6 +247,8 @@ def start_training(cfg):
            "--grad-accum", str(grad_accum)]
     if out:
         cmd += ["--out", os.path.join(ADAPTERS, out)]
+    if model:
+        cmd += ["--model", model]
     if max_steps and max_steps > 0:
         cmd += ["--max-steps", str(max_steps)]
     if resume:

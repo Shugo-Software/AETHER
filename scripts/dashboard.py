@@ -559,6 +559,14 @@ def render(snap):
         h.append('<option value="%s">%s (%s samples)</option>'
                  % (html.escape(d["file"]), html.escape(d["file"]), d["samples"]))
     h.append("</select></label>")
+    ctl = snap.get('control') or {}
+    h.append('<label>student model<select id="ctl-model">')
+    for m in ctl.get('models') or []:
+        h.append('<option value="%s"%s>%s</option>'
+                 % (html.escape(str(m.get('id'))),
+                    ' selected' if m.get('id') == ctl.get('default_model') else '',
+                    html.escape(str(m.get('label') or m.get('id')))))
+    h.append('</select></label>')
     h.append('<label>resume from<select id="ctl-resume">'
              '<option value="">(fresh LoRA)</option>')
     for a in ctrl.get("adapters", []):
@@ -968,6 +976,7 @@ function ctlMsg(t,ok){var m=document.getElementById('ctl-status');
   m.innerHTML=ok?('<span class="ok">'+t+'</span>'):('<span class="bad">'+t+'</span>');}
 function startTrain(){
   var body={dataset:document.getElementById('ctl-dataset').value,
+    model:(document.getElementById('ctl-model')||{}).value||'',
     resume:document.getElementById('ctl-resume').value,
     tag:document.getElementById('ctl-tag').value.trim(),
     out:document.getElementById('ctl-out').value.trim(),

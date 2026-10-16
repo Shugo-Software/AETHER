@@ -111,6 +111,13 @@ def start_export(cfg):
     if gguf not in _QUANTS:
         return False, {"error": "gguf must be one of: (none), %s"
                        % ", ".join(q for q in _QUANTS if q)}
+    # Optional: the base to merge onto. It must match the adapter's own recorded
+    # base (export_model.py refuses otherwise); validating here just fails faster.
+    import aether_models as am
+    model = (cfg.get("model") or "").strip()
+    if model and not am.known(model):
+        return False, {"error": "unknown base model %r — add it to aether_models.py "
+                                "first" % model}
     hub = bool(cfg.get("hub"))
     repo = (cfg.get("repo") or "").strip()
     if repo and not _REPO_RE.match(repo):
@@ -118,6 +125,8 @@ def start_export(cfg):
     public = bool(cfg.get("public"))
 
     cmd = [sys.executable, "-u", EXPORTER, "--adapter", adapter]
+    if model:
+        cmd += ["--model", model]
     if gguf:
         cmd += ["--gguf", gguf]
     if hub:
