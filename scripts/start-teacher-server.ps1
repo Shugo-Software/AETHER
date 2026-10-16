@@ -25,6 +25,21 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+
+# C: is critically small and volatile on this rig (docs/plan.md): every cache and
+# temp path for this process - and for llama-server under it - stays on the repo
+# drive. scripts/aether_env.py does the same for the Python side.
+$repo = Split-Path -Parent $PSScriptRoot
+$env:HF_HOME           = Join-Path $repo "cache\hf"
+$env:HF_HUB_CACHE      = $env:HF_HOME
+$env:HF_DATASETS_CACHE = $env:HF_HOME
+$env:HF_XET_CACHE      = Join-Path $env:HF_HOME "xet"
+$env:PIP_CACHE_DIR     = Join-Path $repo "cache\pip"
+$env:TEMP              = Join-Path $repo "cache\temp"
+$env:TMP               = $env:TEMP
+$env:TMPDIR            = $env:TEMP
+New-Item -ItemType Directory -Force -Path $env:TEMP, $env:HF_HOME | Out-Null
+
 $exe  = "$PSScriptRoot\..\builds\cuda\bin\llama-server.exe"
 $logs = "$PSScriptRoot\..\logs"
 $alias = "qwen3.5-9b-teacher"

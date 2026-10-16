@@ -27,6 +27,10 @@ import threading
 import time
 from datetime import datetime, timezone
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import aether_env  # noqa: E402 - caches/temp stay on the repo drive (never C:)
+aether_env.pin_caches()
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # Probe model, not shipped: point AETHER_BENCH_MODEL at any small GGUF.
 MODEL = os.environ.get("AETHER_BENCH_MODEL",

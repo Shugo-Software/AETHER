@@ -1,4 +1,4 @@
-"""GGUF metadata dumper (Phase 1 inventory + export checks).
+r"""GGUF metadata dumper (Phase 1 inventory + export checks).
 
 Usage (gguf-py comes from a llama.cpp checkout, not from the venv):
   set AETHER_LLAMA_CPP_SRC=<path-to-llama.cpp>
@@ -6,9 +6,15 @@ Usage (gguf-py comes from a llama.cpp checkout, not from the venv):
   venvs\ml\Scripts\python.exe scripts\gguf_inspect.py <model.gguf>
 """
 import sys
+import os
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import aether_env  # noqa: E402 - caches/temp stay on the repo drive (never C:)
+aether_env.pin_caches()
+
 from gguf.gguf_reader import GGUFReader
 
-f = sys.argv[1]
+import osf = sys.argv[1]
 r = GGUFReader(f)
 keys = list(r.fields.keys())
 

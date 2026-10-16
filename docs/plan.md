@@ -135,6 +135,58 @@ Related trap: `serve_student.ps1` must scope process discovery to student aliase
 `-StopAll` killed it once mid-review — 14 review rows recorded worthless
 "connection refused" verdicts before anyone noticed.
 
+## Hard-won constraints (2026-10-15) — nothing in this pipeline may use C:
+
+C: is critically small (0.5 GB free at the time of writing) and one default cache
+on it has already cost a **completed** download. `bigcode/starcoderdata`'s 289 GB
+pull succeeded, then died inside `pull()`'s row-count loop:
+
+```
+OSError: [Errno 28] No space left on device      (arrow_writer.write_table)
+datasets.exceptions.DatasetGenerationError: An error occurred while generating the dataset
+```
+
+`count_rows()` was `Dataset.from_parquet(...)`, which materialises the shard into
+the `datasets` arrow cache first. The ingester pinned its HF caches to G:, but
+`pull()`/`count_rows()` and the `verify`/`fit`/`rewrite` subprocesses inherited the
+venv default — `C:\Users\<user>\.cache\huggingface` — and the job died before it
+could record what it had downloaded (the entry stayed `added`; 289 GB sat on G: as
+an unregistered orphan).
+
+Two fixes, both permanent:
+
+* `scripts/aether_env.py` is the single place that maps `HF_HOME`,
+  `HF_HUB_CACHE`, `HF_DATASETS_CACHE`, `HF_XET_CACHE`, `TORCH_HOME`,
+  `TORCHINDUCTOR_CACHE_DIR`, `PIP_CACHE_DIR` and `TEMP`/`TMP`/`TMPDIR` onto
+  `<AETHER_ROOT>\cache\…`. Every entry point calls `pin_caches()` at startup —
+  **before** the science stack, because `huggingface_hub` latches `HF_HOME` at
+  import time — and the launch scripts (`start-teacher-server.ps1`,
+  `serve_student.ps1`, `start-dashboard.ps1`) set the same variables for
+  PowerShell and llama-server.
+* parquet row counts read the file **footer**
+  (`pyarrow.parquet.ParquetFile(p).metadata.num_rows`) instead of materialising the
+  file: counting 863 shards used to mean hundreds of GB of cache writes for a
+  number that is already in the metadata.
+
+Assert it: `python scripts\aether_env.py --selftest` runs the real libraries in a
+child process and fails if `TEMP`, `HF_HOME`, `HF_HUB_CACHE`, `HF_XET_CACHE` or
+`HF_DATASETS_CACHE` resolves off the repo drive. Measured after the fix: a convert
++ verify stage grew C:'s cache and the shell's TEMP by **0 bytes**.
+
+## Hard-won constraints (2026-10-15) — a conversion that cannot be fingerprinted
+
+While proving the C: rule above, `--convert` was run twice on the same local copy
+with the same flags: 654 rows each time, **different sha256**. The cause was
+`meta.ingested_utc` — a wall-clock stamp written into *every row* by
+`ingest_hf_dataset.py` (4 builders), which nothing reads (`fit_corpus` only
+carries `meta` forward). A per-row timestamp means the manifest's `sha256` can
+never distinguish a re-run from real drift, and every `--convert` rewrites a
+git-tracked manifest.
+
+The stamp is gone (the run time is the manifest's `created_utc`, which is where a
+run-level fact belongs). Same input + flags now yields a byte-identical corpus:
+verified by converting twice — `DCAF3F8C6642DA5F…` both times.
+
 ## Hard-won constraints (2026-10-15) — pushing to GitHub hangs on this rig
 
 `git push` stalls indefinitely (reads/fetches are fine). Trace

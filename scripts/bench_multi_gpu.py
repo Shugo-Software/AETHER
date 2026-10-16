@@ -28,6 +28,10 @@ import sys
 import time
 from datetime import datetime, timezone
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import aether_env  # noqa: E402 - caches/temp stay on the repo drive (never C:)
+aether_env.pin_caches()
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # Capacity-probe model (not shipped): override with AETHER_BENCH_MODEL.
 DEFAULT_MODEL = os.environ.get(

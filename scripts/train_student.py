@@ -13,11 +13,17 @@ import glob
 import json
 import os
 
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import aether_env  # noqa: E402 - caches/temp stay on the repo drive (never C:)
+aether_env.pin_caches()
+
 import torch
 from datasets import Dataset, load_dataset
 from transformers import AutoTokenizer
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+import sysROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 STUDENT = "LiquidAI/LFM2.5-2.6B"
 
 

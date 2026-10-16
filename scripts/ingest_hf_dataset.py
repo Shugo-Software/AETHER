@@ -42,6 +42,10 @@ import subprocess
 import sys
 from datetime import datetime, timezone
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import aether_env  # noqa: E402 - caches/temp stay on the repo drive (never C:)
+aether_env.pin_caches()
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATASETS = os.path.join(ROOT, "datasets")
 EVAL_DIR = os.path.join(DATASETS, "eval")
@@ -80,15 +84,14 @@ def ensure_utf8_mode():
 
 
 def pin_caches():
-    """All HF caches on the repo drive (C: is critically small — plan.md)."""
-    hf = os.path.join(ROOT, "cache", "hf")
-    os.makedirs(hf, exist_ok=True)
-    os.environ.setdefault("HF_HOME", hf)
-    os.environ.setdefault("HF_HUB_CACHE", hf)
-    os.environ.setdefault("HF_DATASETS_CACHE", hf)
-    os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
-    os.environ.setdefault("TEMP", os.path.join(ROOT, "cache", "temp"))
-    os.environ.setdefault("TMP", os.environ["TEMP"])
+    """All HF caches on the repo drive.
+
+    Delegates to `aether_env`, the single place that keeps every cache and temp
+    path off C: (see its docstring: a default cache there already cost a 289 GB
+    pull, which died with ENOSPC on the row count).
+    """
+    import aether_env
+    return aether_env.pin_caches()
 
 
 def sha256_file(path):
@@ -100,6 +103,13 @@ def sha256_file(path):
 
 
 def now():
+    """Run-level UTC stamp — for the manifest, never inside a row.
+
+    A per-row stamp (`meta.ingested_utc`, dropped 2026-10-15) made every
+    `--convert` produce a different sha256 for identical input, so the manifest's
+    fingerprint could not tell a re-run from real drift. Rows are now byte-exact
+    for a fixed input + flags; the run time is the manifest's `created_utc`.
+    """
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
@@ -227,7 +237,7 @@ def ingest_fable(args, seen, drops):
             "completion": completion,
             "provenance": {"repo": FABLE_REPO, "split": split,
                            "scan_index": scanned - 1},
-            "meta": {"ingested_utc": now(), "prompt_chars": len(prompt),
+            "meta": {"prompt_chars": len(prompt),
                      "completion_chars": len(completion),
                      "reasoning_chars": len(reason or "")},
         }
@@ -463,7 +473,7 @@ def map_chat(row, args, seen, drops, repo, split, idx):
             "provenance": {"repo": repo, "split": split, "row_index": idx,
                            "turn_index": t, "mapping": "chat",
                            "turn_mode": args.turn_mode},
-            "meta": {"ingested_utc": now(), "prompt_chars": len(prompt),
+            "meta": {"prompt_chars": len(prompt),
                      "completion_chars": len(completion),
                      "reasoning_chars": len(reason or ""),
                      "messages_before": t, "messages_total": len(msgs)},
@@ -519,7 +529,7 @@ def map_flat(row, args, seen, drops, repo, split, idx):
         "completion": completion,
         "provenance": {"repo": repo, "split": split, "row_index": idx,
                        "mapping": "flat", "columns": list(cols)},
-        "meta": {"ingested_utc": now(), "prompt_chars": len(prompt),
+        "meta": {"prompt_chars": len(prompt),
                  "completion_chars": len(completion),
                  "reasoning_chars": len(reason or "")},
     }
@@ -587,7 +597,7 @@ def ingest_math(args, seen, drops):
                               meta.get("difficulty"))),
             "provenance": {"repo": MATH_REPO, "split": args.split or "test",
                            "location": location},
-            "meta": {"ingested_utc": now(), "name": row.get("name"),
+            "meta": {"name": row.get("name"),
                      "keywords": row.get("keywords"),
                      "prompt_chars": len(prompt), "metadata": meta},
         })

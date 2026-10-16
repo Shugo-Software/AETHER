@@ -49,6 +49,10 @@ sys.path.insert(0, SCRIPTS)
 import ingest_hf_dataset as ing          # single source of truth for row reading
 from review_students import post, parse_json_loose  # the proven teacher protocol
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import aether_env  # noqa: E402 - caches/temp stay on the repo drive (never C:)
+aether_env.pin_caches()
+
 REWRITE_SYSTEM = (
     "You distil engineering transcripts into lessons for a small assistant. "
     "Reply with ONE JSON object and nothing else - no prose, no code fences.\n"

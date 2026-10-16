@@ -40,6 +40,10 @@ import time
 import urllib.request
 from datetime import datetime, timezone
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import aether_env  # noqa: E402 - caches/temp stay on the repo drive (never C:)
+aether_env.pin_caches()
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SCRIPTS = os.path.join(ROOT, "scripts")
 PY = os.path.join(ROOT, "venvs", "ml", "Scripts", "python.exe")
@@ -53,36 +57,24 @@ HF_API = "https://huggingface.co/api/datasets/%s"
 def cache_env():
     """Environment for anything that downloads, converts or counts a dataset.
 
-    The ingestion path used to inherit the venv's defaults, which put the HF
-    caches on C: — a drive this project keeps critically small (plan.md). On
-    2026-10-15 that cost a real failure: counting a parquet shard materialised it
-    into the C: arrow cache and died with ENOSPC while G: had 1.6 TB free.
-    `train_control.TRAIN_ENV` is the canonical G:-resident set; CUDA_VISIBLE_DEVICES
-    is deliberately dropped, because the GPU mask belongs to the trainer only
-    (hiding devices from llama-server/llama-imatrix breaks their device names —
-    recursive_train splits it the same way).
+    Delegates to `aether_env`, the one place that keeps every cache and temp path
+    on the repo drive (C: is critically small — plan.md — and a default cache
+    there already cost a 289 GB pull). It deliberately does NOT set
+    CUDA_VISIBLE_DEVICES: that mask belongs to the trainer only, because hiding
+    the other GPUs from llama-server/llama-imatrix breaks their device names.
     """
-    env = dict(os.environ)
-    try:
-        import train_control as tc
-        env.update({k: v for k, v in tc.TRAIN_ENV.items()
-                    if k != "CUDA_VISIBLE_DEVICES"})
-    except Exception:  # noqa: BLE001 — keep working if that import breaks
-        env.setdefault("HF_HOME", os.path.join(ROOT, "cache", "hf"))
-        env.setdefault("HF_DATASETS_CACHE", os.path.join(ROOT, "cache", "hf"))
-    env.setdefault("PYTHONIOENCODING", "utf-8")
-    return env
+    import aether_env
+    return aether_env.cache_env()
 
 
 def pin_caches():
     """Point this process's own caches at G:.
 
-    `snapshot_download` and `count_rows` run in-process, so they cannot be given
-    a child environment — they read os.environ.
+    `snapshot_download` and `count_rows` run in-process, so they read os.environ
+    rather than a child environment.
     """
-    for key, val in cache_env().items():
-        if key.startswith(("HF_", "PIP_")) or key in ("TEMP", "TMP", "TMPDIR"):
-            os.environ[key] = val
+    import aether_env
+    return aether_env.pin_caches()
 
 
 STATES = ["added", "pulled", "converted", "verified", "fitted", "training",

@@ -32,6 +32,10 @@ from datetime import datetime, timezone
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from bench_single_gpu import VramSampler  # noqa: E402 — reuse the sampler
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import aether_env  # noqa: E402 - caches/temp stay on the repo drive (never C:)
+aether_env.pin_caches()
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BUILDS = {
     "CUDA": os.path.join(ROOT, "builds", "cuda", "bin", "llama-cli.exe"),

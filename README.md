@@ -107,7 +107,7 @@ powershell -ExecutionPolicy Bypass -File scripts\start-dashboard.ps1 -Port 8091
 
 ## Verification
 
-Three checks run offline, and they are what "verified" means here — all three pass
+Four checks run offline, and they are what "verified" means here — all four pass
 on this tree:
 
 ```powershell
@@ -117,6 +117,8 @@ python scripts\hf_datasets.py --selftest   # 24 checks: URL parsing, the registr
 python scripts\dashboard.py --selftest     # 7 checks: the inline script parses,
                                            # every id exists, every fetch hits a
                                            # route `Handler` actually serves
+python scripts\aether_env.py --selftest    # the pipeline never resolves a cache or
+                                           # temp path to C: (see plan.md)
 python scripts\check_no_personal_data.py   # scans what git would publish
 ```
 

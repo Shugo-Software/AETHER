@@ -29,6 +29,10 @@ import sys
 import traceback
 from datetime import datetime, timezone
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import aether_env  # noqa: E402 - caches/temp stay on the repo drive (never C:)
+aether_env.pin_caches()
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 EXPORTS = os.path.join(ROOT, "exports")
 ADAPTERS = os.path.join(ROOT, "adapters")

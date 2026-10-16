@@ -35,6 +35,10 @@ import sys
 import time
 from datetime import datetime, timezone
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import aether_env  # noqa: E402 - caches/temp stay on the repo drive (never C:)
+aether_env.pin_caches()
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 STUDENT = "LiquidAI/LFM2.5-2.6B"
 DATASET = os.path.join(ROOT, "datasets", "phase6_pilot1.jsonl")
