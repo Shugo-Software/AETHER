@@ -291,6 +291,12 @@ def _queue_panel(snap):
                  '(the runner that claimed these is gone &mdash; the queue '
                  'resumes them at train)'
                  % ', '.join(html.escape(str(s)) for s in staled))
+    wedged = q.get('wedged') or []
+    if wedged:
+        bits += (' &middot; <span class="pill bad">wedged</span> %s '
+                 '(alive but silent: no log growth and no CPU use &mdash; '
+                 '<b>Fix stuck job</b> below)'
+                 % ', '.join(html.escape(str(w)) for w in wedged))
     h.append('<div class="small">%s &middot; queue order is the order they are '
              'trained in &middot; skipping keeps files, deleting is gated on a '
              'passed iteration</div>' % bits)
@@ -302,6 +308,11 @@ def _queue_panel(snap):
     h.append('<button class="act stop" id="queue-stop-btn" '
              'title="stop the job the queue is running right now (files are kept; '
              'the queue resumes the row on its next pass)">Stop running job</button>')
+    h.append('<button class="act" id="queue-unstick-btn" '
+             'title="for a runner that is alive but doing nothing (no log growth '
+             'and no CPU use): end its process tree and rewind the row to the stage '
+             'its files reached, so the queue retries it (files are kept)">'
+             'Fix stuck job</button>')
     h.append('</div><div id="queue-status"></div>'
              '<pre id="queue-plan" style="display:none"></pre>')
     h.append('</div>')
@@ -321,6 +332,10 @@ def _queue_panel(snap):
                  % (tone, html.escape(str(it.get('state'))))]
         if it.get('stalled'):
             pills.append('<span class="pill warn">stalled</span>')
+        if it.get('wedged'):
+            pills.append('<span class="pill bad">wedged%s</span>'
+                         % ((' %dm' % round(it.get('silent_min')))
+                            if it.get('silent_min') is not None else ''))
         if it.get('active'):
             pills.append('<span class="pill run">active</span>')
         elif not it.get('pending'):
@@ -1137,6 +1152,8 @@ document.addEventListener('DOMContentLoaded',function(){
   if(qp)qp.addEventListener('click',hfPlan);
   var qs=document.getElementById('queue-stop-btn');
   if(qs)qs.addEventListener('click',function(){hfRun('stop');});
+  var qu=document.getElementById('queue-unstick-btn');
+  if(qu)qu.addEventListener('click',function(){hfQueue('unstick');});
   poll(); setInterval(poll,5000);
 });
 </script>
@@ -1292,6 +1309,13 @@ class Handler(BaseHTTPRequestHandler):
                         out = hf.queue_skip(repo, True)
                     elif action == "unskip":
                         out = hf.queue_skip(repo, False)
+                    elif action == "unstick":
+                        # Kill + rewind, not just stop: a stopped row would stay
+                        # in-flight and hold the queue behind it.
+                        out = hf.unstick(repo, kill=bool(cfg.get("kill", True)),
+                                         stall_min=(cfg.get("stall_min") or None),
+                                         sample=(cfg.get("sample") or 5),
+                                         restart=bool(cfg.get("restart")))
                     else:
                         raise SystemExit("unknown queue action %r" % action)
                 except (SystemExit, Exception) as e:

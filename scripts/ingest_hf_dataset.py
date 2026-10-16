@@ -40,6 +40,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -113,6 +114,30 @@ def now():
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
+def _beat(last, t0, scanned, written, every=None):
+    """Say something while a long convert works.
+
+    A large shard takes minutes to hours between the per-file lines, and silence is
+    indistinguishable from a hang — the queue looked locked up on 2026-10-15 for
+    exactly that reason. One line every `every` seconds (default 20, or
+    AETHER_PROGRESS_SECS) costs nothing, keeps a human's eye satisfied, and gives
+    the dashboard's job feed a heartbeat to judge progress by. Returns the new
+    "last said" timestamp.
+    """
+    if every is None:
+        try:
+            every = float(os.environ.get("AETHER_PROGRESS_SECS") or 20.0)
+        except ValueError:
+            every = 20.0
+    t = time.time()
+    if every > 0 and (t - last) < every:
+        return last
+    elapsed = max(t - t0, 1e-9)
+    print("[ingest] working: %d scanned, %d written, %.0fs elapsed, %.0f rows/s"
+          % (scanned, written, elapsed, scanned / elapsed), flush=True)
+    return t
+
+
 def parse_args():
     ap = argparse.ArgumentParser(description="Ingest an external HF dataset")
     ap.add_argument("--source", default=None, choices=["fable", "openai-math"],
@@ -184,8 +209,10 @@ def ingest_fable(args, seen, drops):
     split = args.split or "train"
     stream = load_dataset(FABLE_REPO, split=split, streaming=True)
     records, scanned = [], 0
+    last = t0 = time.time()
     for row in stream:
         scanned += 1
+        last = _beat(last, t0, scanned, len(records))
         if (args.scan_limit and scanned > args.scan_limit) or \
                 (args.limit and len(records) >= args.limit):
             break
@@ -549,8 +576,10 @@ def ingest_generic(args, seen, drops):
         # looks exactly like "the dataset is unusable" when it is not.
         mapping = None
     records, scanned = [], 0
+    last = t0 = time.time()
     for idx, row in iter_source(args, repo):
         scanned += 1
+        last = _beat(last, t0, scanned, len(records))
         if (args.scan_limit and scanned > args.scan_limit) or \
                 (args.limit and len(records) >= args.limit):
             break
@@ -574,7 +603,9 @@ def ingest_math(args, seen, drops):
     from datasets import load_dataset
     stream = load_dataset(MATH_REPO, split=args.split or "test", streaming=True)
     records = []
+    last = t0 = time.time()
     for i, row in enumerate(stream):
+        last = _beat(last, t0, i + 1, len(records))
         if args.limit and len(records) >= args.limit:
             break
         meta = row.get("metadata") or {}

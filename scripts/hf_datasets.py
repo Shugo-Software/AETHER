@@ -927,6 +927,71 @@ def selftest(log=print):
         ok = ok and good
         log("[selftest] %s a recycled pid is not mistaken for a live runner"
             % ("ok  " if good else "FAIL"))
+        # A runner can also be *alive and doing nothing*: waiting on a file lock or a
+        # socket that will never answer. Log silence alone must not condemn it (a big
+        # convert is quiet between lines), so the CPU reading decides.
+        quiet = os.path.join(LOGS, "selftest-quiet.log")
+        with open(quiet, "w", encoding="utf-8") as fh:
+            fh.write("converting org/one ...\n")
+        stale = time.time() - 40 * 60
+        os.utime(quiet, (stale, stale))
+        qjob = {"pid": os.getpid(), "log": os.path.relpath(quiet, ROOT),
+                "action": "convert", "repo": "org/one"}
+        global process_cpu
+        keep_cpu = process_cpu
+        try:
+            _save_progress({str(os.getpid()): {"cpu": 95.0, "t": time.time() - 5}})
+            process_cpu = lambda pid, _v=100.0: _v        # 1 CPU s/s: clearly working
+            busy = job_silence(qjob, stall_min=15)
+            _save_progress({str(os.getpid()): {"cpu": 100.0, "t": time.time() - 5}})
+            idle = job_silence(qjob, stall_min=15)
+        finally:
+            process_cpu = keep_cpu
+        good = (busy["silent_min"] and busy["silent_min"] > 15
+                and busy["cpu_busy"] is True and busy["wedged"] is False
+                and idle["cpu_busy"] is False and idle["wedged"] is True)
+        ok = ok and good
+        log("[selftest] %s a silent runner is wedged only when it burns no CPU"
+            % ("ok  " if good else "FAIL"))
+        # And the fix puts the row where its files actually are, not back at the top.
+        os.makedirs(os.path.join(DEST_ROOT, "wedged", "files"), exist_ok=True)
+        with open(os.path.join(DEST_ROOT, "wedged", "files", "a.parquet"), "wb") as fh:
+            fh.write(b"x" * 32)
+        corpus = os.path.join(DEST_ROOT, "wedged-corpus.jsonl")
+        fitted = os.path.join(DEST_ROOT, "wedged-fit.jsonl")
+        for path in (corpus, fitted):
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write("{}\n")
+        good = (_resume_stage({"local_dir": os.path.join(DEST_ROOT, "wedged"),
+                               "state": "converting"}, "org/wedged") == "pulled"
+                and _resume_stage({"corpus": corpus, "corpus_rows": 5,
+                                   "local_dir": os.path.join(DEST_ROOT, "wedged")},
+                                  "org/wedged") == "converted"
+                and _resume_stage({"fitted": fitted,
+                                   "local_dir": os.path.join(DEST_ROOT, "wedged")},
+                                  "org/wedged") == "fitted"
+                and _resume_stage({}, "org/nothing") == "added")
+        ok = ok and good
+        for path in (corpus, fitted):
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+        ok = ok and good
+        log("[selftest] %s a wedged row resumes at the stage its files reached"
+            % ("ok  " if good else "FAIL"))
+        # Nothing live means nothing wedged: the detection must not cry wolf while
+        # the queue is sitting idle.
+        upsert(again, "org/one", state="pulled", loop_pid=None)
+        item = [i for i in queue_items(again) if i["id"] == "org/one"][0]
+        good = item["wedged"] is False and "wedged" in queue_summary(again)
+        ok = ok and good
+        log("[selftest] %s an idle queue reports nothing wedged"
+            % ("ok  " if good else "FAIL"))
+        try:
+            os.remove(quiet)
+        except OSError:
+            pass
         upsert(again, "org/one", state="pulled", bytes=123, rows=4, loop_pid=None)
         plan = queue_plan(again)
         good = (plan["pending"] == 1 and plan["next"] == "org/one"
@@ -1032,7 +1097,23 @@ def main():
                     help="stop the running job, or one dataset's job (keeps the "
                          "files; the queue self-heals on its next pass)")
     ap.add_argument("--dry-run", action="store_true",
-                    help="with --stop: say what would be stopped, kill nothing")
+                    help="with --stop or --unstick: say what would happen, do nothing")
+    ap.add_argument("--unstick", metavar="REF", nargs="?", const="",
+                    help="fix a runner that is alive but doing nothing (no log growth "
+                         "and no CPU): kill its tree and rewind the row to the stage "
+                         "its files reached, so the queue can retry it")
+    ap.add_argument("--stall-min", type=int, default=STALL_MIN,
+                    help="minutes of silence before a live runner counts as wedged "
+                         "(default %d); 0 disables the stall fixer" % STALL_MIN)
+    ap.add_argument("--sample-secs", type=int, default=5,
+                    help="with --unstick: seconds to sample CPU use before deciding "
+                         "(a busy convert must not be killed)")
+    ap.add_argument("--restart", action="store_true",
+                    help="with --unstick: start the queue again once something was "
+                         "freed")
+    ap.add_argument("--no-stall-fix", action="store_true",
+                    help="with --queue-run: wait forever instead of killing a wedged "
+                         "stage and retrying it")
     ap.add_argument("--queue-run", action="store_true",
                     help="process every queued dataset end to end")
     ap.add_argument("--queue-plan", action="store_true",
@@ -1190,6 +1271,14 @@ def main():
         res = stop(a.stop or None, dry_run=a.dry_run)
         print("[hf] %s" % json.dumps(res, ensure_ascii=False))
         return 0 if res.get("ok") else 1
+    if a.unstick is not None:
+        # The fixer: silence + no CPU means the runner is not coming back on its
+        # own, so end its tree and put the row where its files actually got to.
+        res = unstick(a.unstick or None, kill=True, dry_run=a.dry_run,
+                      stall_min=(a.stall_min or None),
+                      sample=(a.sample_secs or None), restart=a.restart)
+        print("[hf] %s" % json.dumps(res, ensure_ascii=False))
+        return 0 if res.get("ok") else 1
     if a.queue_run:
         # Recorded like any other job so the dashboard's Pipeline jobs table can
         # see a queue run started from a console (its log is wherever the caller
@@ -1204,7 +1293,9 @@ def main():
         return queue_run(split=a.split, limit=a.limit, map_=a.map_,
                          max_len=a.max_len, max_steps=a.max_steps,
                          sample=a.sample, min_pass=a.min_pass, log=print,
-                         force=a.force, allow_big=a.allow_big_pull)
+                         force=a.force, allow_big=a.allow_big_pull,
+                         stall_min=(a.stall_min or None),
+                         stall_fix=(not a.no_stall_fix))
 
     repo = None
     for ref in (a.pull, a.convert, a.verify, a.fit, a.train, a.drop,
@@ -1525,8 +1616,15 @@ def stop(repo=None, dry_run=False, log=print):
     return res
 
 
-def wait_for_pid(pid, poll=30, log=print):
-    """Block until a detached child exits (a loop iteration runs for hours)."""
+def wait_for_pid(pid, poll=30, log=print, repo=None, stall_min=None):
+    """Block until a detached child exits (a loop iteration runs for hours).
+
+    `stall_min` adds the other half of waiting: while this waits, a child whose log
+    has gone quiet and whose CPU is flat is handed to `unstick` instead of being
+    waited on forever — which is how a queue used to sit behind a wedged conversion
+    until a human noticed. Returns "exited", "wedged", or None when the process
+    table cannot be read.
+    """
     while True:
         try:
             out = subprocess.run(["tasklist", "/FI", "PID eq %d" % pid, "/NH"],
@@ -1535,7 +1633,17 @@ def wait_for_pid(pid, poll=30, log=print):
         except Exception:  # noqa: BLE001 — no tasklist => assume it finished
             return None
         if str(pid) not in out:
-            return True
+            return "exited"
+        if stall_min:
+            # Fail open: if no recorded job names this pid, there is nothing to
+            # measure and waiting is the honest answer.
+            mine = [j for j in wedge_report(stall_min=stall_min)
+                    if str(j.get("pid")) == str(pid)]
+            if mine:
+                log("[hf] %s (pid %s) looks wedged: %s"
+                    % (repo or "job", pid, mine[0].get("why")))
+                unstick(repo=repo, kill=True, stall_min=stall_min, log=log)
+                return "wedged"
         time.sleep(poll)
 
 
@@ -1602,6 +1710,222 @@ def stalled(e):
     if (e.get("state") or "") not in IN_FLIGHT_STATES:
         return False
     return bool(_owner_pid(e)) and not _owner_alive(e)
+
+
+# Minutes of silence before a *live* runner counts as wedged. Silence alone is not
+# proof: a 40 GB shard converts for a long time between progress lines.
+STALL_MIN = 15
+_PROGRESS_PATH = os.path.join(LOGS, "hf-progress.json")
+
+
+def process_cpu(pid):
+    """CPU seconds a pid has burned, or None when it cannot be read.
+
+    Waiting on a file lock, a socket that will never answer, or a prompt nobody
+    typed all show as ~0 CPU, while a long conversion keeps burning it. Together
+    with log silence that is what separates "slow dataset" from "stuck".
+    """
+    try:
+        out = subprocess.run(
+            ["powershell", "-NoProfile", "-Command",
+             "$p=Get-CimInstance Win32_Process -Filter 'ProcessId=%d' | "
+             "Select-Object -First 1;"
+             "if($p){($p.KernelModeTime+$p.UserModeTime)/10000000}" % int(pid)],
+            capture_output=True, text=True, timeout=25).stdout.strip()
+        return float(out) if out else None
+    except Exception:  # noqa: BLE001 — unreadable is reported as unreadable
+        return None
+
+
+def _load_progress():
+    try:
+        with open(_PROGRESS_PATH, encoding="utf-8") as fh:
+            data = json.load(fh)
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _save_progress(data):
+    try:
+        os.makedirs(LOGS, exist_ok=True)
+        tmp = _PROGRESS_PATH + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(data, fh, indent=1)
+        os.replace(tmp, _PROGRESS_PATH)
+    except OSError:
+        pass
+
+
+def job_silence(job, stall_min=None, sample=None):
+    """Is this live job still doing anything? Log silence + CPU movement.
+
+    `silent_sec` comes from the log's mtime (needs no history at all — a stage that
+    has said nothing has written nothing). `cpu_busy` needs two readings of the
+    pid's CPU time, so the previous one is remembered in `logs/hf-progress.json`:
+    the dashboard polls every few seconds, and a one-shot CLI run passes
+    `sample=<seconds>` to take both readings itself.
+
+    The CPU probe only runs once the log is *already* quieter than half the
+    threshold, so watching a healthy run costs nothing.
+    """
+    limit = (stall_min or STALL_MIN) * 60
+    path = os.path.join(ROOT, job.get("log") or "")
+    try:
+        silent_sec = max(time.time() - os.path.getmtime(path), 0.0)
+    except OSError:
+        silent_sec = float("inf")     # no log at all: nothing has been said, ever
+    pid = job.get("pid")
+    out = {"silent_sec": silent_sec,
+           "silent_min": (round(silent_sec / 60.0, 1)
+                          if silent_sec != float("inf") else None),
+           "cpu_busy": None, "wedged": False, "why": ""}
+    if silent_sec == float("inf") or silent_sec > limit:
+        prog = _load_progress()
+        prev = prog.get(str(pid)) or {}
+        cpu = process_cpu(pid) if pid else None
+        if sample and cpu is not None and pid:
+            time.sleep(float(sample))
+            cpu2 = process_cpu(pid)
+            if cpu2 is not None:
+                out["cpu_busy"] = ((cpu2 - cpu) / max(float(sample), 1e-9)) > 0.02
+                cpu = cpu2
+        elif cpu is not None and prev.get("cpu") is not None:
+            dt = time.time() - float(prev.get("t") or 0)
+            if dt > 1:
+                out["cpu_busy"] = ((cpu - float(prev["cpu"])) / dt) > 0.02
+        if cpu is not None:
+            prog[str(pid)] = {"cpu": cpu, "t": time.time(),
+                              "log": os.path.basename(path), "utc": now()}
+            _save_progress(prog)
+        out["wedged"] = out["cpu_busy"] is not True
+        out["why"] = ("%s with no output%s"
+                      % (("no log file" if silent_sec == float("inf")
+                          else "%s of silence" % _span(silent_sec)),
+                         " and no CPU use" if out["cpu_busy"] is False
+                         else " (CPU use could not be read, so silence decides)"))
+    return out
+
+
+def _span(seconds):
+    """Seconds as '45s' / '12m' / '1.6h' — how long something has been quiet."""
+    if seconds < 90:
+        return "%.0fs" % seconds
+    if seconds < 5400:
+        return "%.0fm" % (seconds / 60.0)
+    return "%.1fh" % (seconds / 3600.0)
+
+
+def wedge_report(stall_min=None, sample=None):
+    """Every live job that has gone quiet — the queue's "is it stuck?" answer."""
+    out = []
+    for j in jobs():
+        if not j.get("running"):
+            continue
+        p = job_silence(j, stall_min=stall_min, sample=sample)
+        if p["wedged"]:
+            out.append(dict(j, **p))
+    return out
+
+
+def _resume_stage(e, repo):
+    """The stage an entry's files on disk actually justify restarting from."""
+    ev = _evidence(e, repo)
+    if ev.get("fitted_present"):
+        return "fitted"
+    if ev.get("corpus_present") and e.get("corpus_rows"):
+        return "converted"
+    if ev.get("on_disk") and dir_bytes(e.get("local_dir") or local_dir_for(repo)) > 0:
+        return "pulled"
+    return "added"
+
+
+def unstick(repo=None, kill=False, dry_run=False, stall_min=None, sample=None,
+            log=print, restart=False):
+    """Deal with a runner that is alive but doing nothing.
+
+    `stalled()` covers the dead runner; this is the other half of the same problem.
+    The runner still exists as a process, its log has not grown for `stall_min`
+    minutes and it is not burning CPU, so the queue waits behind it forever — and
+    plain `stop` alone would not help either, because the row would stay in an
+    in-flight state with its files half-written.
+
+    So `kill=True` ends the whole subtree *and* moves the entry back to the stage
+    its files on disk actually reached (`_resume_stage`), which is what lets the
+    queue pick it up on its next pass. Nothing is deleted. `restart=True` also
+    starts the queue again straight away.
+    """
+    data = load_registry()
+    found = wedge_report(stall_min=stall_min, sample=sample)
+    if repo:
+        want = resolve_repo(repo)
+        target = entry_of(data, want) or {}
+        found = [j for j in found if j.get("repo") == want]
+        if not found:
+            # No *live* job, but the row may still claim work with a pid we cannot
+            # read: say that rather than claim nothing is wrong.
+            if (target.get("state") or "") in IN_FLIGHT_STATES:
+                return {"ok": True, "fixed": [], "repo": want,
+                        "note": ("%s is in state=%s but no live job explains it — "
+                                 "--unstick only fixes a live runner; a dead one "
+                                 "is the queue's own resume to handle"
+                                 % (want, target.get("state")))}
+            return {"ok": True, "fixed": [], "repo": want,
+                    "note": "%s looks fine (no live job, nothing silent)" % want}
+    if not found:
+        return {"ok": True, "fixed": [], "note": "nothing wedged"}
+
+    fixed = []
+    for j in found:
+        r = j.get("repo")
+        e = entry_of(data, r) or {}
+        stage = _resume_stage(e, r)
+        note = j.get("why") or "no output"
+        log("[hf] wedged: %s %s (pid %s) — %s"
+            % (j.get("action"), r or "(unknown dataset)", j.get("pid"), note))
+        tail = (j.get("tail") or "").strip().splitlines()
+        if tail:
+            log("[hf]   last said: %s" % tail[-1][:160])
+        if dry_run:
+            fixed.append({"repo": r, "pid": j.get("pid"), "would_kill": bool(kill),
+                          "resume_at": stage, "why": note,
+                          "silent_min": j.get("silent_min")})
+            continue
+        killed = False
+        if kill:
+            import run_state
+            res = run_state.stop({"pid": int(j["pid"]), "role": j.get("action"),
+                                  "repo": r, "tag": e.get("tag")})
+            killed = bool(res.get("stopped"))
+            if not killed:
+                log("[hf]   kill refused for pid %s (%s) — leaving the row alone"
+                    % (j.get("pid"), res.get("note") or "not ours"))
+                fixed.append({"repo": r, "pid": j.get("pid"), "killed": False,
+                              "resume_at": stage, "why": note,
+                              "note": res.get("note")})
+                continue
+        if r:
+            # Clearing the claim is what makes the queue move: `stalled()` and the
+            # lock both read the owner pid, and a state alone would keep waiting.
+            upsert(data, r, state=stage, loop_pid=None, runner_pid=None, pid=None,
+                   wedge={"utc": now(), "silent_min": j.get("silent_min"),
+                          "pid": j.get("pid"), "action": j.get("action"),
+                          "cpu_busy": j.get("cpu_busy")},
+                   note=("wedged: %s (pid %s) %s — %s; resumes at %s"
+                         % (j.get("action"), j.get("pid"),
+                            "killed" if killed else "left running", note, stage)))
+            save_registry(data)
+            log("[hf]   %s: state=%s and the claim is cleared — the queue resumes "
+                "there" % (r, stage))
+        fixed.append({"repo": r, "pid": j.get("pid"), "killed": killed,
+                      "resume_at": stage, "why": note,
+                      "silent_min": j.get("silent_min")})
+    out = {"ok": True, "fixed": fixed, "dry_run": bool(dry_run)}
+    if restart and not dry_run and any(f.get("killed") for f in fixed):
+        job = spawn("queue_run")
+        out["queue_run_pid"] = job.get("pid")
+        log("[hf] queue restarted (pid %s)" % job.get("pid"))
+    return out
 
 # What the queue will do with an item that is in a given state.
 NEXT_STEP = {
@@ -1684,14 +2008,26 @@ def active_repo():
     return None
 
 
+def _wedge_by_repo(stall_min=None):
+    """repo -> why it looks stuck, for whatever is live and quiet right now."""
+    out = {}
+    for j in wedge_report(stall_min=stall_min):
+        if j.get("repo"):
+            out[j["repo"]] = {"why": j.get("why"), "silent_min": j.get("silent_min"),
+                              "pid": j.get("pid"), "action": j.get("action")}
+    return out
+
+
 def queue_items(data=None):
     """The ordered queue with, per item, what happens next and whether it is locked."""
     data = data or load_registry()
     act = active_repo()
+    wedge = _wedge_by_repo()
     out = []
     for pos, e in enumerate(data["datasets"]):
         st = e.get("state") or "unknown"
         is_stalled = stalled(e)
+        w = wedge.get(e["id"]) or {}
         out.append({
             "pos": pos, "id": e["id"], "state": st,
             "pending": st not in DONE_STATES,
@@ -1701,6 +2037,9 @@ def queue_items(data=None):
                           else NEXT_STEP.get(st, "?")),
             "active": act == e["id"],
             "stalled": is_stalled,
+            "wedged": bool(w),
+            "wedge_why": w.get("why"),
+            "silent_min": w.get("silent_min"),
             "locked": ((act == e["id"])
                        or (st in IN_FLIGHT_STATES and not is_stalled)),
             "tag": e.get("tag"), "note": e.get("note")})
@@ -1784,7 +2123,11 @@ def queue_summary(data=None):
     return {"by_state": out, "pending": len(pend),
             "next": pend[0]["id"] if pend else None,
             "active": active_repo(),
-            "stalled": [e["id"] for e in data["datasets"] if stalled(e)]}
+            "stalled": [e["id"] for e in data["datasets"] if stalled(e)],
+            # Wedged (alive but quiet) is a different problem with a different fix,
+            # so the panel can say which one it is looking at.
+            "wedged": [e["id"] for e in data["datasets"]
+                       if e["id"] in _wedge_by_repo()]}
 
 
 def _port_open(port, timeout=0.4):
@@ -1995,7 +2338,8 @@ def queue_plan(data=None, settings=None, remote=False):
 
 
 def queue_run(split="full", limit=0, map_="auto", max_len=1536, max_steps=-1,
-              sample=40, min_pass=0.6, log=print, force=False, allow_big=False):
+              sample=40, min_pass=0.6, log=print, force=False, allow_big=False,
+              stall_min=None, stall_fix=True):
     """One dataset at a time: pull -> convert -> verify -> fit -> train -> gate
     -> learned_verified -> delete the local copy -> next dataset.
 
@@ -2022,7 +2366,8 @@ def queue_run(split="full", limit=0, map_="auto", max_len=1536, max_steps=-1,
                 return 0
             log("[hf] %s is already being worked on (pid %d) — waiting for it "
                 "rather than starting a second runner" % (repo, pid))
-            wait_for_pid(pid, log=log)
+            wait_for_pid(pid, log=log, repo=repo,
+                         stall_min=(stall_min if stall_fix else None))
             continue                      # re-read the state and re-plan
         if stalled(e):
             log("[hf] %s: the runner that had this is gone (state was %s) — "
@@ -2075,7 +2420,14 @@ def queue_run(split="full", limit=0, map_="auto", max_len=1536, max_steps=-1,
                          min_pass=min_pass, log=log)
         log("[hf] waiting for the loop (pid %d): train/export/serve/review/gate"
             % pid)
-        wait_for_pid(pid, log=log)
+        why = wait_for_pid(pid, log=log, repo=repo,
+                           stall_min=(stall_min if stall_fix else None))
+        if why == "wedged":
+            # The loop was killed mid-flight and the row rewound, so a gate read
+            # here would grade a run that never finished. Re-plan instead.
+            log("[hf] %s: the loop was wedged and has been killed — re-planning "
+                "rather than reading a gate that never finished" % repo)
+            continue
         ok, detail = learned_verified(repo, tag=tag, log=log)
         if not ok:
             log("[hf] GATE NOT PASSED for %s: %s" % (repo, json.dumps(detail)))

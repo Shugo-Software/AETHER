@@ -29,6 +29,7 @@ import sys
 import traceback
 from datetime import datetime, timezone
 
+
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import aether_env  # noqa: E402 - caches/temp stay on the repo drive (never C:)
 aether_env.pin_caches()
@@ -392,12 +393,52 @@ def merge(adapter_dir, out_dir, state):
     return code
 
 
+def _size(n):
+    """Bytes as MB/GB — this module has no `human()` of its own."""
+    for unit, div in (("GB", 1024 ** 3), ("MB", 1024 ** 2)):
+        if n >= div:
+            return "%.1f %s" % (n / div, unit)
+    return "%d B" % n
+
+
+def _gguf_ok(path, ref_bytes):
+    """Is this a plausible GGUF next to its reference (the f16)?
+
+    llama-quantize writes its output in place, so a killed or crashed pass left a
+    partial file with the final name — `exports/gsm8k/gsm8k-iq4_xs.gguf` sat at
+    313 MB against a 5.1 GB f16 (2026-10-15) and its first four bytes were not even
+    the `GGUF` magic, yet nothing noticed: the manifest listed only the f16, so the
+    stub was invisible until someone compared sizes. Two cheap checks make that
+    impossible to keep silently: the magic, and a floor far below any real quant
+    (q3_k_s is ~23% of f16; 2% only catches a truncated write).
+    """
+    try:
+        size = os.path.getsize(path)
+    except OSError:
+        return False, "missing"
+    if size < 1024 * 1024:
+        return False, "only %s (a GGUF is never this small)" % _size(size)
+    with open(path, "rb") as fh:
+        magic = fh.read(4)
+    if magic != b"GGUF":
+        return False, ("first 4 bytes are %s, not GGUF — a truncated write"
+                       % magic.hex().upper())
+    if ref_bytes and size < ref_bytes * 0.02:
+        return False, ("%s against a %s reference — that is a truncated file, "
+                       "not a quant" % (_size(size), _size(ref_bytes)))
+    return True, "%s" % _size(size)
+
+
 def to_gguf(out_dir, quants, state, imatrix=None):
     """Convert merged HF model -> f16 GGUF -> each requested quant.
 
     `quants` is a list of QUANT_TYPES keys; empty = leave GGUF alone. The f16
     conversion always runs (it is the source for every quantize pass) and is kept
     as the reference file. Returns the list of GGUF paths produced.
+
+    Every artifact is written to `<name>.part` and renamed only after it passes
+    `_gguf_ok`, so an interrupted pass cannot leave a file that looks like a model
+    — the failure mode that produced a 313 MB `gsm8k-iq4_xs.gguf`.
     """
     if not quants:
         return []
@@ -409,12 +450,22 @@ def to_gguf(out_dir, quants, state, imatrix=None):
     state.write("converting", stage="gguf")
     base = os.path.basename(out_dir)
     f16 = os.path.join(out_dir, "%s-f16.gguf" % base)
+    for stale in glob.glob(os.path.join(out_dir, "*.part")):
+        # A previous pass died mid-write; say so and drop it rather than let it
+        # accumulate next to the real artifacts.
+        print("[export] removing stale partial %s" % os.path.basename(stale),
+              flush=True)
+        try:
+            os.remove(stale)
+        except OSError:
+            pass
     # Reuse an existing f16: converting 2.6B again costs minutes and the merged
     # weights are immutable once written (same run, same dir).
     if os.path.isfile(f16) and "f16" not in quants:
         print("[export] gguf f16: reusing %s" % f16, flush=True)
     else:
-        cmd = [sys.executable, CONVERT, "--outfile", f16, "--outtype", "f16"]
+        tmp = f16 + ".part"
+        cmd = [sys.executable, CONVERT, "--outfile", tmp, "--outtype", "f16"]
         # --trust-remote-code exists on newer pins; probe --help so we don't
         # break on the pinned version if it lacks the flag.
         help_txt = subprocess.run([sys.executable, CONVERT, "--help"],
@@ -424,7 +475,12 @@ def to_gguf(out_dir, quants, state, imatrix=None):
         cmd.append(out_dir)
         print("[export] gguf f16:", " ".join(cmd), flush=True)
         subprocess.run(cmd, check=True, env=_hf_env())
+        good, why = _gguf_ok(tmp, 0)
+        if not good:
+            raise SystemExit("f16 conversion produced %s (%s)" % (tmp, why))
+        os.replace(tmp, f16)
     files = [f16]
+    ref_bytes = os.path.getsize(f16)
     for quant in quants:
         qtype = QUANT_TYPES.get(quant)
         if not qtype:
@@ -434,13 +490,26 @@ def to_gguf(out_dir, quants, state, imatrix=None):
                 "%s needs an importance matrix — pass --imatrix <file> (build "
                 "one with llama-imatrix; see docs/export.md)" % quant)
         qpath = os.path.join(out_dir, "%s-%s.gguf" % (base, quant))
+        tmp = qpath + ".part"
         state.write("quantizing", stage="quantize", quant=quant)
         cmd = [QUANTIZE]
         if imatrix:
             cmd += ["--imatrix", imatrix]
-        cmd += [f16, qpath, qtype]
+        cmd += [f16, tmp, qtype]
         print("[export] quantize %s -> %s" % (qtype, qpath), flush=True)
         subprocess.run(cmd, check=True)
+        good, why = _gguf_ok(tmp, ref_bytes)
+        if not good:
+            # Never publish a stub: a quant that did not come out is a failure to
+            # report, not a file to keep.
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+            raise SystemExit("quantize %s produced an unusable file (%s)"
+                             % (qtype, why))
+        os.replace(tmp, qpath)
+        print("[export] %s ok: %s" % (quant, why), flush=True)
         files.append(qpath)
     return files
 

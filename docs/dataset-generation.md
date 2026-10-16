@@ -253,8 +253,28 @@ python scripts\hf_datasets.py --learned-verified org/name
 python scripts\hf_datasets.py --drop org/name --yes
 python scripts\hf_datasets.py --queue-plan          # what the queue would do (dry run)
 python scripts\hf_datasets.py --queue-run          # one dataset after another
+python scripts\hf_datasets.py --unstick            # fix a runner that is alive but doing nothing
+python scripts\hf_datasets.py --unstick org/name --dry-run   # just say what it would fix
 python scripts\hf_datasets.py --selftest           # URL parsing, registry, drop gate, queue lock, resume decision
 ```
+
+## When something wedges
+
+Two different failures used to look the same in the panel — "working on X" forever:
+
+| | what it looks like | how it is handled |
+|---|---|---|
+| **stalled** | the state says in-flight, the owner pid is gone (machine slept, console closed, OOM) | the queue itself: `stalled()` resumes the row at the stage its corpus reached |
+| **wedged** | the runner is *still a process*, but its log has not grown for `--stall-min` (15) minutes **and** it burns no CPU (a file lock, a socket that will never answer) | `--unstick`: kill the tree, rewind the row to the stage its files on disk actually reached (`_resume_stage`), keep every file |
+
+Silence alone is deliberately not enough to condemn a runner: a large shard converts
+for a long time between lines. Two things keep that honest — the ingester now prints
+`[ingest] working: N scanned, M written, ... every ~20s` (`AETHER_PROGRESS_SECS`
+overrides it), and the CPU reading decides. `--unstick` samples CPU for
+`--sample-secs` (5) before acting, and `--queue-run` does the same check while it
+waits, so a wedged conversion is killed and retried on the queue's next pass instead
+of holding everything behind it. Nothing is ever deleted by the fixer, and a row it
+touched carries the reason in `wedge` + `note`.
 
 The same actions are in the dashboard ("Hugging Face datasets" panel: link, pull +
 prepare, train, run queue, per-row verify/fit/train/gate/delete), where a slow
