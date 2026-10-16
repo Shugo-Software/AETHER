@@ -793,6 +793,56 @@ def train(repo, tag=None, iteration=1, max_steps=-1, max_len=1536, sample=40,
     return proc.pid, tag
 
 
+def gate_trained(repo, iteration=None, max_len=1536, sample=40, min_pass=0.6,
+                 log=print):
+    """Run the loop's *other half* on an adapter that already exists.
+
+    An ad-hoc training run (the dashboard's Start) trains and stops there: no export,
+    no serve, no review, no gate. What the dataset owes after that is exactly the
+    loop's tail, and `recursive_train.py --skip-train` is that tail — it keeps
+    adapters/<tag>, exports and quantizes it, serves it, has the teacher grade it and
+    writes the iteration's gate. So a row that trained ad-hoc is gated, not trained
+    again. Returns (pid, tag) like `train()`, so the queue waits for it the same way.
+    """
+    data = load_registry()
+    e = entry_of(data, repo)
+    if e is None:
+        raise SystemExit("unknown dataset %s" % repo)
+    corpus = e.get("fitted") or e.get("corpus")
+    if not corpus:
+        raise SystemExit("nothing to gate for %s: no corpus on record" % repo)
+    tag = ((e.get("adhoc") or {}).get("tag") or e.get("trained_tag")
+           or e.get("tag") or slug_tag(repo))
+    import aether_models as am
+    adapter_dir = am.adapter_dir(tag)
+    if not os.path.isfile(os.path.join(adapter_dir, "adapter_config.json")):
+        raise SystemExit(
+            "nothing to gate for %s: no adapter at %s — the training run did not "
+            "finish, so this row needs training instead"
+            % (repo, os.path.relpath(adapter_dir, ROOT)))
+    iteration = iteration or next_iteration(tag)
+    cmd = [PY, "-u", os.path.join(SCRIPTS, "recursive_train.py"),
+           "--iteration", str(iteration), "--tag", tag, "--corpus", corpus,
+           "--max-len", str(max_len), "--sample", str(sample),
+           "--min-pass", str(min_pass), "--skip-train"]
+    log("[hf] $ %s" % " ".join(cmd))
+    log("[hf] gating the adapter %s already produced (iteration %d): export → "
+        "quantize → serve → review → gate, no retraining" % (tag, iteration))
+    env = cache_env()
+    env["AETHER_JOB"] = "1"
+    log_path = os.path.join(LOGS, "hf-gate-%s.log" % tag[:40])
+    with open(log_path, "w", encoding="utf-8") as lf:
+        proc = subprocess.Popen(cmd, cwd=ROOT, env=env, stdout=lf,
+                                stderr=subprocess.STDOUT,
+                                creationflags=0x00000200)   # detached
+    _record_job("gate", repo, proc.pid, log_path, cmd)
+    upsert(data, repo, state="training", loop_pid=proc.pid, gate_pid=proc.pid,
+           note=("gating the adapter trained ad-hoc (tag %s): export → serve → "
+                 "review → gate, no retraining" % tag))
+    save_registry(data)
+    return proc.pid, tag
+
+
 def learned_verified(repo, tag=None, log=print):
     """Mark learned_verified if the loop's gate passed on this dataset.
 
@@ -1017,6 +1067,45 @@ def selftest(log=print):
         ok = ok and good
         log("[selftest] %s an idle queue reports nothing wedged"
             % ("ok  " if good else "FAIL"))
+        # A dataset that trained ad-hoc is gated, not trained again: the adapter
+        # exists, so the ladder owes the gate and nothing else.
+        good = (LADDER["trained"] == ("gate",)
+                and stage_steps({"state": "trained", "fitted": "datasets/x.jsonl"})
+                == ["gate"]
+                and "gate" in NEXT_STEP["trained"])
+        ok = ok and good
+        log("[selftest] %s a row that trained ad-hoc gates instead of retraining"
+            % ("ok  " if good else "FAIL"))
+        made = os.path.join(ROOT, "adapters", "selftest-adhoc")
+        os.makedirs(made, exist_ok=True)
+        with open(os.path.join(made, "adapter_config.json"), "w",
+                  encoding="utf-8") as fh:
+            fh.write("{}")
+        upsert(again, "org/one", state="training", loop_pid=999998,
+               adhoc={"tag": "selftest-adhoc", "utc": now()})
+        changed = reconcile_adhoc(again, save=False)
+        good = ("org/one" in changed
+                and entry_of(again, "org/one")["state"] == "trained")
+        ok = ok and good
+        log("[selftest] %s a finished ad-hoc run with an adapter becomes trained"
+            % ("ok  " if good else "FAIL"))
+        upsert(again, "org/one", state="training", loop_pid=999998,
+               fitted="datasets/gsm8k-fit.jsonl",
+               adhoc={"tag": "selftest-adhoc-missing", "utc": now()})
+        reconcile_adhoc(again, save=False)
+        good = entry_of(again, "org/one")["state"] == "fitted"
+        ok = ok and good
+        log("[selftest] %s an ad-hoc run that produced no adapter returns to its "
+            "fitted stage (from the files on disk)" % ("ok  " if good else "FAIL"))
+        for name in ("adapter_config.json",):
+            try:
+                os.remove(os.path.join(made, name))
+            except OSError:
+                pass
+        try:
+            os.rmdir(made)
+        except OSError:
+            pass
         try:
             os.remove(quiet)
         except OSError:
@@ -1692,6 +1781,8 @@ def next_iteration(tag):
 def queue_pending(data=None):
     """Datasets still to process, in queue order (skipped/excluded ones omitted)."""
     data = data or load_registry()
+    if reconcile_adhoc():
+        data = load_registry()
     return [e for e in data["datasets"]
             if (e.get("state") or "") not in DONE_STATES]
 
@@ -1869,6 +1960,48 @@ def _resume_stage(e, repo):
     return "added"
 
 
+def reconcile_adhoc(data=None, save=True):
+    """Turn finished ad-hoc runs into a state the queue can act on.
+
+    A training run started from the dashboard records `adhoc` in the row and leaves
+    it at state=training. When that pid is gone the row must stop claiming a live run
+    and start saying what is actually owed — which is *not* another training pass:
+    the adapter exists, so what is missing is the loop's export → serve → review →
+    gate. If the run produced no adapter (it failed, or was pinned to 0 steps), the
+    honest answer is the fitted stage.
+
+    Returns the ids it changed. Cheap: only rows carrying an `adhoc` record are
+    looked at, and only writes when something actually changed.
+    """
+    data = data or load_registry()
+    changed = []
+    for e in data["datasets"]:
+        a = e.get("adhoc") or {}
+        if not a or (e.get("state") or "") not in IN_FLIGHT_STATES:
+            continue
+        if _owner_alive(e):
+            continue                      # still running: leave it alone
+        tag = a.get("tag") or ""
+        produced = False
+        if tag:
+            import aether_models as am
+            produced = os.path.isfile(os.path.join(am.adapter_dir(tag),
+                                                   "adapter_config.json"))
+        stage = "trained" if produced else _resume_stage(e, e["id"])
+        upsert(data, e["id"], state=stage, loop_pid=None, pid=None,
+               trained_utc=a.get("utc"), trained_tag=tag or None,
+               note=("ad-hoc training finished (tag %s): the adapter exists, so the "
+                     "queue resumes at the gate — export, serve, review — instead of "
+                     "training it again" % tag) if produced else
+                    ("ad-hoc training produced no adapter"
+                     + (" (tag %s)" % tag if tag else "")
+                     + " — the queue resumes at the fitted stage and trains it"))
+        changed.append(e["id"])
+    if changed and save:
+        save_registry(data)
+    return changed
+
+
 def unstick(repo=None, kill=False, dry_run=False, stall_min=None, sample=None,
             log=print, restart=False):
     """Deal with a runner that is alive but doing nothing.
@@ -1960,6 +2093,7 @@ def unstick(repo=None, kill=False, dry_run=False, stall_min=None, sample=None,
 NEXT_STEP = {
     "added": "pull", "pulled": "convert", "converted": "verify",
     "verified": "fit", "fitted": "train", "training": "review + gate",
+    "trained": "gate the adapter it produced (export → serve → review)",
     "skipped": "(skipped — files kept)", "learned_verified": "delete local copy",
     "dropped": "(released)", "not_trainable": "(excluded — see audit)",
     "error": "(failed — see history)", "rewriting": "teacher rewrite",
@@ -1989,6 +2123,7 @@ LADDER = {
     "fitted": (),
     "rewriting": ("verify", "fit"),
     "training": (),        # a live loop owns this dataset right now
+    "trained": ("gate",),  # trained ad-hoc: export/serve/review/gate is what is owed
 }
 
 
@@ -2003,7 +2138,10 @@ def stage_steps(e):
     if stalled(e):
         st = resume_state(e)
     steps = list(LADDER.get(st, LADDER["added"]))
-    if not live:
+    # Every item ends at the gate — except one that already trained ad-hoc. For that
+    # row the gate *is* the remaining work: retraining would throw away the run it
+    # just paid for (and `--skip-train` is exactly the loop's other half).
+    if not live and st != "trained":
         steps.append("train")
     return steps
 
@@ -2050,6 +2188,8 @@ def _wedge_by_repo(stall_min=None):
 def queue_items(data=None):
     """The ordered queue with, per item, what happens next and whether it is locked."""
     data = data or load_registry()
+    if reconcile_adhoc():
+        data = load_registry()          # a finished ad-hoc run may have changed a row
     act = active_repo()
     wedge = _wedge_by_repo()
     out = []
@@ -2421,7 +2561,18 @@ def queue_run(split="full", limit=0, map_="auto", max_len=1536, max_steps=-1,
                                                 log=log),
                      "verify": lambda: verify(repo, max_len=max_len, log=log),
                      "fit": lambda: fit(repo, max_len=max_len, log=log)}
+        gated = False
         for stage in steps:
+            if stage == "gate":
+                # The adapter is on disk; what this row owes is the loop's tail.
+                pid, gate_tag = gate_trained(repo, max_len=max_len, sample=sample,
+                                             min_pass=min_pass, log=log)
+                log("[hf] waiting for the gate pass (pid %d): export → serve → "
+                    "review → gate" % pid)
+                wait_for_pid(pid, log=log, repo=repo,
+                             stall_min=(stall_min if stall_fix else None))
+                tag, gated = gate_tag, True
+                continue
             if stage == "train":
                 # Ingestion is done and stays done; the gate cannot pass without
                 # the teacher, so stop here rather than after hours of training.
@@ -2443,20 +2594,21 @@ def queue_run(split="full", limit=0, map_="auto", max_len=1536, max_steps=-1,
             log("[hf] %s: not trainable as SFT — next dataset. drops: %s"
                 % (repo, json.dumps(after.get("dropped") or {})))
             continue
-        tag = (entry_of(load_registry(), repo) or {}).get("tag") or slug_tag(repo)
-        pid, tag = train(repo, tag=tag, iteration=next_iteration(tag),
-                         max_steps=max_steps, max_len=max_len, sample=sample,
-                         min_pass=min_pass, log=log)
-        log("[hf] waiting for the loop (pid %d): train/export/serve/review/gate"
-            % pid)
-        why = wait_for_pid(pid, log=log, repo=repo,
-                           stall_min=(stall_min if stall_fix else None))
-        if why == "wedged":
-            # The loop was killed mid-flight and the row rewound, so a gate read
-            # here would grade a run that never finished. Re-plan instead.
-            log("[hf] %s: the loop was wedged and has been killed — re-planning "
-                "rather than reading a gate that never finished" % repo)
-            continue
+        if not gated:
+            tag = (entry_of(load_registry(), repo) or {}).get("tag") or slug_tag(repo)
+            pid, tag = train(repo, tag=tag, iteration=next_iteration(tag),
+                             max_steps=max_steps, max_len=max_len, sample=sample,
+                             min_pass=min_pass, log=log)
+            log("[hf] waiting for the loop (pid %d): train/export/serve/review/gate"
+                % pid)
+            why = wait_for_pid(pid, log=log, repo=repo,
+                               stall_min=(stall_min if stall_fix else None))
+            if why == "wedged":
+                # The loop was killed mid-flight and the row rewound, so a gate read
+                # here would grade a run that never finished. Re-plan instead.
+                log("[hf] %s: the loop was wedged and has been killed — re-planning "
+                    "rather than reading a gate that never finished" % repo)
+                continue
         ok, detail = learned_verified(repo, tag=tag, log=log)
         if not ok:
             log("[hf] GATE NOT PASSED for %s: %s" % (repo, json.dumps(detail)))

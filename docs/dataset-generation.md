@@ -308,6 +308,26 @@ waits, so a wedged conversion is killed and retried on the queue's next pass ins
 of holding everything behind it. Nothing is ever deleted by the fixer, and a row it
 touched carries the reason in `wedge` + `note`.
 
+## Training from the panel vs the queue (one story, 2026-10-16)
+
+Both drive the same dataset, and they no longer disagree about it. **Start** in the
+Training controls panel records its run in the dataset registry exactly as the queue
+does (`state=training` plus the owner pid), so the queue panel shows the row as
+active, `--queue-run` waits for it instead of starting a second trainer on the same
+corpus, and the dataset picker is annotated with the queue's own view (position,
+NEXT in queue, fitted vs converted, state, locked, and how many rows lose their
+answer — with `health_fitted` for the fitted file and `health` for the converted one,
+because those are two different files).
+
+Start runs the *trainer*: no export, serve, review or gate. When that pid is gone the
+row is reconciled to **`trained`** — the adapter exists, so what it owes is the gate —
+and the ladder for that state is `("gate",)`: the queue's next pass runs
+`recursive_train.py --skip-train` (export → quantize → serve → review → gate) on the
+adapter that already exists, instead of retraining and throwing away the run it just
+paid for. If the run left no adapter (it failed, or was pinned to zero steps), the row
+falls back to the stage its *files on disk* justify — `fitted` when the fitted corpus
+is there — and is trained again on the next pass.
+
 The same actions are in the dashboard ("Hugging Face datasets" panel: link, pull +
 prepare, train, run queue, per-row verify/fit/train/gate/delete), where a slow
 multi-GB pull runs detached and its log tail shows in "Pipeline jobs". Every

@@ -607,9 +607,11 @@ def render(snap):
              '<b>NEXT in queue</b> is what it would pick up. A dataset started here is '
              'recorded in the queue as <b>training</b> with this run\'s pid, so the '
              'queue waits for it instead of starting a second trainer on the same '
-             'corpus. When this run ends, the queue sees the row as stalled at its '
-             'fitted stage and the loop trains it again end to end (so it gets the '
-             'gate this panel does not run).</div>')
+             'corpus. When this run ends the row says so — state <b>trained</b> — and '
+             'what it owes is the <b>gate</b>: the queue\'s next pass exports, serves '
+             'and reviews the adapter this run produced, without retraining it. If the '
+             'run left no adapter, the row returns to its fitted stage and trains '
+             'again.</div>')
     h.append("</div>")
 
     # Dataset queue (its own section: order, next step, reorder/skip)
