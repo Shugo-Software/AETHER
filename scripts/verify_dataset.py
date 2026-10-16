@@ -110,9 +110,9 @@ def audit(rows, tok, max_len, fmt):
     detail = []
     for i, rec in enumerate(rows):
         full = fmt(rec, tok)
-        ids = tok(full, add_special_tokens=False)["input_ids"]
+        ids = tok(full)["input_ids"]
         n_full = len(ids)
-        h_ids = tok(head_text(rec, tok), add_special_tokens=False)["input_ids"]
+        h_ids = tok(head_text(rec, tok))["input_ids"]
         n_head = len(h_ids)
         n_comp = max(n_full - n_head, 0)
         kept = ids[:max_len]

@@ -138,7 +138,21 @@ What changed (`scripts/train_student.py`):
   destroy the run. `MetricsCallback` now also warns on any non-finite loss.
 - Two new diagnostic lines print what the run will actually train on:
   `[train] labels: prompt_loss=masked rows_used=330/330 dropped_no_answer=0
-  answer_token_share=0.3581`.
+  answer_cut=0 answer_token_share=0.3581`.
+- **The rule is enforced in the trainer, in both loss modes** (2026-10-16). It used
+  to be a promise `fit_corpus.py` kept and the trainer merely trusted, so any corpus
+  that skipped fitting could be trained anyway: unmasked, a row whose answer was cut
+  away is 100% prompt gradient — it teaches the student to reproduce the input.
+  Measured on `datasets/starcoderdata-code.jsonl`: `answer_cut=3 rows=[1897, 2176,
+  2210]` at `max_len=1536` (`phase6_pro1.jsonl`: 67 rows). Those rows are now dropped
+  in `masked` *and* `full`, counted as `answer_cut` (per-row indices included), warned
+  about with the exact `fit_corpus.py` command that fixes them, and written into the
+  run's state — an unfitted corpus can no longer make a run quietly train on
+  prompts. The measurement itself is shared: `record_pieces()` renders the row, and
+  the fitter, the verifier and the trainer count the same string with the same
+  tokenizer call (special tokens included), because a budget measured one way and
+  enforced another is how three rows lost their answers while the fitter said they
+  fitted.
 
 **Loss values are not comparable across this change** (different token sets) and
 not comparable across corpora. Before: 2.41 at step 2 of 96 on 500 rows. After:

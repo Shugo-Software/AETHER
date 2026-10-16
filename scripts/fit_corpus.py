@@ -104,13 +104,12 @@ def main():
     tok = AutoTokenizer.from_pretrained(a.tokenizer, trust_remote_code=True)
 
     def n_tokens(text):
-        return len(tok(text, add_special_tokens=False)["input_ids"])
+        # The same call the trainer truncates with (special tokens included). A
+        # budget that is measured one way and enforced another is exactly how rows
+        # lose their answers while the fitter believes they fit.
+        return len(tok(text)["input_ids"])
 
-    def prefix_of(rec):
-        """Everything between the prompt head and the completion."""
-        reason = (rec.get("reasoning") or "").strip()
-        return (reason + "</think>\n") if reason else "</think>\n"
-
+    end = ts.END_MARK
     rows = load_rows(src)
     holdout = set()
     if a.holdout:
@@ -120,19 +119,23 @@ def main():
                                                 len(holdout)), flush=True)
 
     def answer_tokens(head, pre, comp):
-        """Tokens that completion-only masking would actually train on."""
-        return n_tokens(head + pre + comp + END) - n_tokens(head + pre)
+        """Tokens that completion-only masking would actually train on.
+
+        `head`/`pre`/`end` come from `train_student.record_pieces`, so the fitter and
+        the trainer count the same string — one definition, no drift.
+        """
+        return n_tokens(head + pre + comp + end) - n_tokens(head + pre)
 
     kept, dropped = [], {"prompt_too_long": 0, "anchor_holdout": 0,
                          "answer_too_short_after_trim": 0, "duplicate_cap": 0}
     trimmed = 0
     tok_in = tok_out = 0
     for rec in rows:
-        head = ts.format_head(rec, tok) or (
-            "%s\n\nUser: %s\n\nAssistant: " % (
-                rec.get("system") or "You are a helpful Python engineer.",
-                rec["prompt"]))
-        pre = prefix_of(rec)
+        head, pre, _ = ts.record_pieces(rec, tok)
+        if head is None:
+            head = ("%s\n\nUser: %s\n\nAssistant: "
+                    % (rec.get("system") or "You are a helpful Python engineer.",
+                       rec["prompt"]))
         base = n_tokens(head + pre)
         if prompt_key(rec) in holdout:
             dropped["anchor_holdout"] += 1
@@ -143,7 +146,7 @@ def main():
             dropped["prompt_too_long"] += 1
             continue
         comp = rec["completion"]
-        if n_tokens(head + pre + comp + END) <= a.max_len:
+        if n_tokens(head + pre + comp + end) <= a.max_len:
             new, atk = dict(rec), answer_tokens(head, pre, comp)
         else:
             # Binary search (token count is monotonic in cut position) for the
@@ -152,7 +155,7 @@ def main():
             lo, hi, best = 0, len(cands) - 1, None
             while lo <= hi:
                 mid = (lo + hi) // 2
-                if n_tokens(head + pre + comp[:cands[mid]] + END) <= a.max_len:
+                if n_tokens(head + pre + comp[:cands[mid]] + end) <= a.max_len:
                     best, lo = cands[mid], mid + 1
                 else:
                     hi = mid - 1

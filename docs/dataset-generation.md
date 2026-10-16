@@ -106,6 +106,13 @@ from training:
 - `scripts/verify_dataset.py --jsonl … --max-len 1536 [--overlap …]` — read-only.
   Reports composition, token lengths, and a per-row truncation class:
   **complete** / **partial** (answer partly cut) / **answer_cut** (answer gone),
+  measured with the same tokenizer call the trainer truncates with
+  (`fit_corpus.py` uses it too — one accounting, no drift).
+  **Any `answer_cut` row means the corpus is not trainable as it stands**: masked it
+  has no valid loss, unmasked all of its gradient is the prompt. Fix it with
+  `fit_corpus.py` before training; the trainer enforces the same rule itself (both
+  loss modes) and names the row indices, so this can no longer be skipped by
+  accident.
   whether `<|im_end|>` survives, the share of loss-relevant tokens that are
   answers, duplicate prompts, and prompt overlap with another file (leakage).
   Exits non-zero if any row loses its answer.

@@ -25,6 +25,7 @@ from transformers import AutoTokenizer
 
 import sysROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 STUDENT = "LiquidAI/LFM2.5-2.6B"
+END_MARK = "<|im_end|>\n"
 
 
 def parse_args():
@@ -107,12 +108,29 @@ def format_record(rec, tok):
     sys = rec.get("system") or "You are a helpful Python engineer."
     prompt = rec["prompt"]
     comp = rec["completion"]
-    reason = (rec.get("reasoning") or "").strip()
+    head, pre, end = record_pieces(rec, tok)
+    if head is None:
+        head = f"{sys}\n\nUser: {prompt}\n\nAssistant: "
+        return head + comp
+    return head + pre + comp + end
+
+
+def record_pieces(rec, tok):
+    """A rendered row in its three parts: (head, prefix, end_mark).
+
+    One definition, shared by `format_record`, `fit_corpus.py` and the truncation
+    check below. A single budget number (`--max-len`) must not be *measured* in one
+    place and *enforced* in another: that is how three rows of
+    `datasets/starcoderdata-code.jsonl` came to lose their answer entirely at
+    max_len=1536 while the fitter's own arithmetic said they fitted (found
+    2026-10-16, reported by the operator).
+    """
     head = format_head(rec, tok)
-    if head is not None:
-        return head + (reason + "</think>\n" if reason else "</think>\n") \
-            + comp + "<|im_end|>\n"
-    return f"{sys}\n\nUser: {prompt}\n\nAssistant: {comp}"
+    if head is None:
+        head = None      # caller falls back to a plain User/Assistant frame
+    reason = (rec.get("reasoning") or "").strip()
+    prefix = (reason + "</think>\n") if reason else "</think>\n"
+    return head, prefix, END_MARK
 
 
 def load_rows(jsonl_path):
@@ -140,8 +158,9 @@ def build_hf_dataset(jsonl_path, tok, max_len, mask_prompt=True):
     gradient — this is what makes the run instruction tuning rather than
     continued pretraining (unmasked, ~2/3 of the gradient goes to reproducing
     the input, and a row whose answer was truncated away trains nothing but the
-    prompt). Such rows are dropped here: a row with no unmasked label has no
-    valid loss and would produce a NaN step. Returns (dataset, stats).
+    prompt). Such rows are dropped here in **both** modes and counted: masked they
+    have no valid loss at all (a NaN step), unmasked every one of their gradient
+    tokens is the prompt. Returns (dataset, stats).
     """
     rows = load_rows(jsonl_path)
     texts, heads = [], []
@@ -152,33 +171,53 @@ def build_hf_dataset(jsonl_path, tok, max_len, mask_prompt=True):
             sys = r.get("system") or "You are a helpful Python engineer."
             h = f"{sys}\n\nUser: {r['prompt']}\n\nAssistant: "
         heads.append(h)
-    head_lens = [len(tok(h, add_special_tokens=False)["input_ids"])
-                 for h in heads]
+    head_lens = [len(tok(h)["input_ids"]) for h in heads]
     ds = Dataset.from_dict({"text": texts, "head_len": head_lens})
 
     def tok_fn(batch):
         enc = tok(batch["text"], truncation=True, max_length=max_len)
-        if mask_prompt:
-            enc["labels"] = [_mask_labels(ids, hl) for ids, hl in
-                             zip(enc["input_ids"], batch["head_len"])]
+        enc["labels"] = [_mask_labels(ids, hl) for ids, hl in
+                         zip(enc["input_ids"], batch["head_len"])]
         return enc
 
     tokenized = ds.map(tok_fn, batched=True,
                        remove_columns=["text", "head_len"])
+    # An answer token must survive the window, whatever the loss mode is. Masked, a
+    # row with no unmasked label has no valid loss at all (CrossEntropyLoss over an
+    # empty set → NaN); unmasked, 100% of its gradient is the prompt, which teaches
+    # the student to reproduce the input. Both are worse than not training the row,
+    # so it is dropped in either mode — and counted, in `stats`, in the run's state
+    # and in the log, because a corpus that quietly shrinks is not the corpus you
+    # measured.
+    keep = [i for i, (ids, hl) in
+            enumerate(zip(tokenized["input_ids"], head_lens))
+            if len(ids) > min(hl, len(ids))]
+    keepset = set(keep)
+    cut = [i for i in range(len(tokenized)) if i not in keepset]
+    masked_labels = tokenized["labels"] if mask_prompt else None
     stats = {"rows_in": len(rows), "mask_prompt": bool(mask_prompt),
-             "dropped_no_answer": 0, "rows_used": len(tokenized)}
+             "answer_cut": len(cut), "answer_cut_rows": cut[:20],
+             "dropped_no_answer": len(cut), "rows_used": len(keep)}
+    tokenized = tokenized.select(keep)
     if mask_prompt:
-        keep = [i for i, lab in enumerate(tokenized["labels"])
-                if any(x != -100 for x in lab)]
-        stats["dropped_no_answer"] = len(tokenized) - len(keep)
-        tokenized = tokenized.select(keep)
-        stats["rows_used"] = len(tokenized)
         total = sum(len(x) for x in tokenized["input_ids"])
         answer = sum(sum(1 for t in lab if t != -100)
-                     for lab in tokenized["labels"])
+                     for lab in (masked_labels[i] for i in keep))
         stats["tokens_total"] = total
         stats["tokens_answer"] = answer
         stats["answer_share"] = round(1.0 * answer / total, 4) if total else None
+    else:
+        # `full` loss: the collator builds labels from input_ids, so a labels column
+        # would fight it (and double the dataset for nothing).
+        tokenized = tokenized.remove_columns(["labels"])
+    if cut:
+        print("[train] WARNING %d of %d row(s) lose their answer inside max_len=%d "
+              "and were dropped (rows %s%s): unmasked they would train on the "
+              "prompt alone. Fit the corpus first —\n"
+              "  python scripts/fit_corpus.py --in <corpus> --out <corpus>-fit.jsonl "
+              "--max-len %d"
+              % (len(cut), len(rows), max_len, cut[:8],
+                 " ..." if len(cut) > 8 else "", max_len), flush=True)
     return tokenized, stats
 
 
@@ -394,9 +433,10 @@ def build_trainer(args, tok, model, ds, dstats, out_dir, metrics_path, *,
     except Exception as e:  # noqa: BLE001 — never let diagnostics block training
         print("[train] dataloader diagnostic failed: %s" % e, flush=True)
     print("[train] labels: prompt_loss=%s rows_used=%d/%d"
-          " dropped_no_answer=%d answer_token_share=%s"
+          " dropped_no_answer=%d answer_cut=%d answer_token_share=%s"
           % (args.prompt_loss, dstats["rows_used"], dstats["rows_in"],
-             dstats["dropped_no_answer"], dstats.get("answer_share")), flush=True)
+             dstats["dropped_no_answer"], dstats.get("answer_cut"),
+             dstats.get("answer_share")), flush=True)
     if args.prompt_loss == "masked":
         print("[train] only answer tokens carry gradient (%d of %s kept tokens)"
               % (dstats.get("tokens_answer", 0), dstats.get("tokens_total")),
@@ -437,6 +477,8 @@ def train_corpus(args, tok, model, ds_path, out_dir, state, *, phase=None,
                   "grad_accum": args.grad_accum, "lora_r": args.lora_r,
                   "lora_alpha": args.lora_alpha, "optim": "paged_adamw_8bit",
                   "precision": "fp16", "phase": phase,
+                  "answer_cut": dstats.get("answer_cut"),
+                  "answer_cut_rows": dstats.get("answer_cut_rows"),
                   "metrics_file": os.path.basename(metrics_path or ""),
                   "resume": (os.path.relpath(resume_dir, ROOT)
                              if resume_dir else None)})
