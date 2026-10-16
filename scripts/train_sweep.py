@@ -10,11 +10,17 @@ each one, and the teacher's verdict on each checkpoint before moving on.
 Per phase:
   train    the corpus (fresh optimizer + fresh schedule, same loaded weights)
   checkpoint  a full PEFT adapter under adapters/<tag>/phase-NN-<corpus>
-  export   merge that checkpoint on the CPU (export_model.py --gguf <quant>)
-  serve    the quant on the idle 1060 (CUDA2) — training holds CUDA1, teacher CUDA0
-  grade    review_students.py: the teacher scores a sample of that corpus
-  history  optionally re-grade the *earlier* corpora with this checkpoint, which is
-           how forgetting shows up while it is still cheap to react to
+  export   merge that checkpoint on the CPU, convert f16 (the reference file), then
+           quantize the small card's quant from a *fresh* importance matrix built from
+           this phase's own weights
+  serve    the pair the loop uses — student A (iq4_xs) on the 3 GB 1060 at CUDA2:8082,
+           student B (f16) on the 6 GB 1060 at CUDA1:8083. The teacher is CUDA0 (the
+           4070 Ti) and is never used for student work
+  grade    review_students.py grades *both* students on that corpus: the phase's rate
+           is their mean, and each is recorded separately — a pair that disagrees is a
+           finding to look at, not noise to average away
+  history  optionally re-grade the *earlier* corpora on the same pair, which is how
+           forgetting shows up while it is still cheap to react to
 
 Everything is written to `logs/sweep-<tag>.json` in the same shape the loop's state
 uses (iterations, per-step ok, a gate), so the dashboard's loop panel renders it
@@ -46,6 +52,17 @@ ROOT = rt.ROOT
 LOGS = rt.LOGS
 ADAPTERS = os.path.join(ROOT, "adapters")
 EXPORTS = os.path.join(ROOT, "exports")
+
+# The loop's student pair, one per 1060 (recursive_train.py's --quant-a/--quant-b and
+# the devices/ports it serves them on). Measured on this rig rather than assumed:
+# CUDA0 = the 4070 Ti (teacher), CUDA1 = the 6 GB 1060, CUDA2 = the 3 GB 1060.
+STUDENT_A = {"suffix": "a", "quant": "iq4_xs", "device": "CUDA2", "port": 8082}
+STUDENT_B = {"suffix": "b", "quant": "f16", "device": "CUDA1", "port": 8083}
+# What a serving/quantize child must see: this process is masked to the training card,
+# and hiding the other GPUs from llama-server makes it re-index and call CUDA2 invalid
+# (recursive_train.py records that exact failure). Children get the fleet back.
+ALL_DEVICES = "0,1,2"
+CALIB = os.path.join(ROOT, "cache", "quants", "calib.txt")
 
 
 def now():
@@ -81,20 +98,54 @@ def review_rate(tag):
     return rt.pass_rate(path)
 
 
-def serve_start(model, port, alias):
-    """Serve one checkpoint on the idle 3 GB card (training holds CUDA1)."""
+def serve_start(model, port, alias, device):
+    """Serve one student: A on the 3 GB card (CUDA2), B on the 6 GB card (CUDA1).
+
+    The child is handed the full device list explicitly. This process is masked to the
+    training card so torch anchors there, and a masked child would make llama.cpp
+    re-index — the loop's own comment records `invalid device: CUDA2` from exactly this.
+    """
     serve = os.path.join(ROOT, "scripts", "serve_student.ps1")
     return rt.run([rt.POWERSHELL, "-ExecutionPolicy", "Bypass", "-File", serve,
-                   "-Model", model, "-Device", "CUDA2", "-Port", str(port),
+                   "-Model", model, "-Device", device, "-Port", str(port),
                    "-Alias", alias, "-Ctx", "4096"],
-                  "sweep-%s-serve.log" % alias)
+                  "sweep-%s-serve.log" % alias,
+                  extra_env={"CUDA_VISIBLE_DEVICES": ALL_DEVICES})
 
 
-def serve_stop(port, alias):
+def serve_stop(alias, port):
+    """Stop one student endpoint (only aliases with the students' prefix are stopped)."""
     serve = os.path.join(ROOT, "scripts", "serve_student.ps1")
     return rt.run([rt.POWERSHELL, "-ExecutionPolicy", "Bypass", "-File", serve,
                    "-Stop", "-Port", str(port)],
-                  "sweep-%s-serve-stop.log" % alias)
+                  "sweep-%s-serve-stop.log" % alias,
+                  extra_env={"CUDA_VISIBLE_DEVICES": ALL_DEVICES})
+
+
+def imatrix_for(f16, name):
+    """A *fresh* importance matrix for this phase's weights (llama-imatrix).
+
+    An imatrix built from an older iteration is a measurable quality regression, which
+    is why the loop rebuilds one per iteration; this does the same. GPU first, CPU
+    fallback — the loop learned the imatrix's device id can disagree with llama-server's.
+    Returns (path_or_None, log_tail).
+    """
+    exe = os.path.join(ROOT, "builds", "cuda", "bin", "llama-imatrix.exe")
+    out = os.path.join(ROOT, "cache", "quants", "imatrix-%s.gguf" % name)
+    if not os.path.isfile(exe):
+        return None, "llama-imatrix.exe not found: %s" % os.path.relpath(exe, ROOT)
+    if not os.path.isfile(CALIB):
+        return None, ("calibration text missing: %s (build it from the training "
+                      "corpora, never the eval set)" % os.path.relpath(CALIB, ROOT))
+    base = [exe, "-m", f16, "-f", CALIB, "-o", out]
+    env = {"CUDA_VISIBLE_DEVICES": ALL_DEVICES}
+    ok, tail = rt.run(base + ["-ngl", "99"], "sweep-%s-imatrix.log" % name,
+                      extra_env=env)
+    if not ok:
+        print("[sweep] GPU imatrix failed — retrying on CPU (-ngl 0)", flush=True)
+        ok, tail = rt.run(base + ["-ngl", "0"], "sweep-%s-imatrix-cpu.log" % name,
+                          extra_env=env)
+    return (out if ok and os.path.isfile(out) else None), tail
 
 
 def review(corpus, port, tag, args, sample=None):
@@ -142,9 +193,11 @@ def parse_args(argv=None):
     ap.add_argument("--history-sample", type=int, default=10,
                     help="rows per earlier corpus, re-graded by each new checkpoint "
                          "(0 = off) — this is how forgetting shows up early")
-    ap.add_argument("--quant", default="q4_k_m",
-                    help="quant served for grading (fits the idle 3 GB card)")
-    ap.add_argument("--port", type=int, default=8082)
+    # The students' quants, devices and ports are the loop's measured layout
+    # (STUDENT_A / STUDENT_B at the top of this file, cross-checked against
+    # recursive_train.py and verified on the cards). They are deliberately not flags: a
+    # sweep that graded a different pair than the loop serves would not be measuring the
+    # thing that ships.
     ap.add_argument("--skip-export", action="store_true")
     ap.add_argument("--skip-grade", action="store_true")
     ap.add_argument("--stop-on-fail", action="store_true",
@@ -173,7 +226,8 @@ def main(argv=None):
             for i, c in enumerate(corpora)]
     if a.dry_run:
         print(json.dumps({"tag": a.tag, "phases": plan,
-                          "export": not a.skip_export, "quant": a.quant,
+                          "export": not a.skip_export,
+                          "students": [dict(s) for s in (STUDENT_A, STUDENT_B)],
                           "grade": not a.skip_grade, "sample": a.sample,
                           "history_sample": a.history_sample,
                           "checkpoints": os.path.relpath(
@@ -277,48 +331,86 @@ def main(argv=None):
                                  "checkpoint": os.path.relpath(phase_dir, ROOT)}
         save(state, state_path, rec)
 
-        model_path = None
+        artefacts = {}
         if not a.skip_export:
             name = "%s-p%02d" % (a.tag, i)
+            out_dir = os.path.join(EXPORTS, name)
+            f16 = os.path.join(out_dir, "%s-f16.gguf" % name)
+            # f16 first: it is the reference file, the source the imatrix is built from,
+            # and the artefact student B is served as.
             ok, tail = rt.run([rt.PY, "-u",
                                os.path.join(ROOT, "scripts", "export_model.py"),
                                "--adapter", phase_dir, "--name", name,
                                "--title", "%s phase %d" % (a.tag, i),
-                               "--gguf", a.quant],
+                               "--gguf", "f16"],
                               "sweep-%s-p%02d-export.log" % (a.tag, i))
-            model_path = os.path.join(EXPORTS, name, "%s-%s.gguf" % (name, a.quant))
-            have = os.path.isfile(model_path)
-            rec["steps"]["export"] = {"ok": bool(ok and have), "tail": tail,
-                                      "gguf": (os.path.relpath(model_path, ROOT)
-                                               if have else None)}
+            have_f16 = os.path.isfile(f16)
+            rec["steps"]["export"] = {"ok": bool(ok and have_f16), "tail": tail,
+                                      "f16": (os.path.relpath(f16, ROOT)
+                                              if have_f16 else None)}
             save(state, state_path, rec)
-            if not have:
+            if not have_f16:
                 rec["status"] = "failed:export"
                 save(state, state_path, rec)
                 if a.stop_on_fail:
                     return 1
                 continue
+            artefacts["f16"] = f16
+            # The small card's quant needs a *fresh* importance matrix from these very
+            # weights; the second pass quantizes only and reuses the f16.
+            imatrix, itail = imatrix_for(f16, name)
+            rec["steps"]["imatrix"] = {"ok": bool(imatrix), "tail": itail,
+                                       "file": (os.path.relpath(imatrix, ROOT)
+                                                if imatrix else None)}
+            save(state, state_path, rec)
+            if imatrix:
+                ok_q, tail_q = rt.run(
+                    [rt.PY, "-u", os.path.join(ROOT, "scripts", "export_model.py"),
+                     "--adapter", phase_dir, "--name", name,
+                     "--gguf", STUDENT_A["quant"], "--imatrix", imatrix, "--gguf-only"],
+                    "sweep-%s-p%02d-quant.log" % (a.tag, i))
+                small = os.path.join(out_dir, "%s-%s.gguf" % (name, a.quant_a))
+                have_small = os.path.isfile(small)
+                rec["steps"]["quant"] = {"ok": bool(ok_q and have_small),
+                                         "tail": tail_q, "quant": a.quant_a,
+                                         "gguf": (os.path.relpath(small, ROOT)
+                                                  if have_small else None)}
+                if have_small:
+                    artefacts["small"] = small
+            save(state, state_path, rec)
 
         rates = []
-        if not a.skip_grade and model_path:
-            server = "%s-p%02d" % (a.tag, i)
-            ok, tail = serve_start(model_path, a.port, server)
-            rec["steps"]["serve"] = {"ok": ok, "tail": tail}
-            if ok:
-                _ok_r, payload = review(corpus, a.port, server, a)
-                rec["steps"]["review"] = payload
-                if payload.get("pass_rate") is not None:
-                    rates.append(payload["pass_rate"])
+        if not a.skip_grade and artefacts.get("f16") and artefacts.get("small"):
+            pair = ((STUDENT_A, artefacts["small"]), (STUDENT_B, artefacts["f16"]))
+            students = {}
+            for stu, gpath in pair:
+                alias = "%s-p%02d-%s" % (a.tag, i, stu["suffix"])
+                ok_s, stail = serve_start(gpath, stu["port"], alias, stu["device"])
+                rec["steps"]["serve-%s" % stu["suffix"]] = {
+                    "ok": ok_s, "tail": stail, "device": stu["device"],
+                    "quant": stu["quant"]}
+                if not ok_s:
+                    students[stu["suffix"]] = None
+                    serve_stop(alias, stu["port"])
+                    continue
+                _ok_r, payload = review(corpus, stu["port"], alias, a)
+                payload["quant"] = stu["quant"]
+                payload["device"] = stu["device"]
+                rec["steps"]["review-%s" % stu["suffix"]] = payload
+                rate = payload.get("pass_rate")
+                students[stu["suffix"]] = rate
+                if rate is not None:
+                    rates.append(rate)
                 if i > 1 and a.history_sample:
                     hist = {}
                     for j, earlier in enumerate(corpora[:i - 1], start=1):
-                        htag = "%s-p%02d-ret%02d" % (a.tag, i, j)
-                        _ok_h, ph_payload = review(earlier, a.port, htag, a,
-                                                   sample=a.history_sample)
-                        hist[os.path.basename(earlier)] = ph_payload.get("pass_rate")
-                    rec["retention"] = hist
-                    rec["steps"]["retention"] = {"ok": True, "targets": hist}
-            serve_stop(a.port, server)
+                        htag = "%s-p%02d-ret%02d-%s" % (a.tag, i, j, stu["suffix"])
+                        _ok_h, hp = review(earlier, stu["port"], htag, a,
+                                           sample=a.history_sample)
+                        hist[os.path.basename(earlier)] = hp.get("pass_rate")
+                    rec.setdefault("retention", {})[stu["suffix"]] = hist
+                serve_stop(alias, stu["port"])
+            rec["students"] = students
             save(state, state_path, rec)
 
         rec["mean_pass_rate"] = (sum(rates) / len(rates)) if rates else None
