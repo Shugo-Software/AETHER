@@ -38,7 +38,8 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 EXPORTS = os.path.join(ROOT, "exports")
 ADAPTERS = os.path.join(ROOT, "adapters")
 LOGS = os.path.join(ROOT, "logs")
-STUDENT = "LiquidAI/LFM2.5-2.6B"
+import aether_models as am  # noqa: E402 - the base model comes from one registry
+STUDENT = am.DEFAULT
 # llama.cpp checkout used for HF -> GGUF conversion (read-only: this pipeline
 # never writes into it). Point AETHER_LLAMA_CPP_SRC at your clone.
 LLAMA_SRC = os.environ.get("AETHER_LLAMA_CPP_SRC",
@@ -607,6 +608,11 @@ def main():
     ap = argparse.ArgumentParser(description="AETHER model export")
     ap.add_argument("--adapter", required=True,
                     help="adapter name under adapters/ or a path")
+    ap.add_argument("--model", default=None,
+                    help="base model to merge onto (default: %s). Must match the "
+                         "base the adapter was trained on — this script refuses "
+                         "otherwise, because a wrong base merges happily and "
+                         "produces nonsense" % am.DEFAULT)
     ap.add_argument("--out", default=None,
                     help="merged model dir (default exports/<name>)")
     ap.add_argument("--name", default=None,
@@ -642,6 +648,32 @@ def main():
         raise SystemExit("not an adapter (no adapter_config.json): %s"
                          % args.adapter)
     adapter_name = os.path.basename(os.path.normpath(adapter_dir))
+    # Which base was *this* adapter trained on? The adapter itself is the authority.
+    # Merging a LoRA onto a different base runs without error and produces a model
+    # that is quietly wrong, so the mismatch is refused rather than warned about.
+    global STUDENT
+    STUDENT = am.resolve(args.model)
+    trained_on = ""
+    try:
+        with open(os.path.join(adapter_dir, "adapter_config.json"),
+                  encoding="utf-8") as fh:
+            trained_on = (json.load(fh) or {}).get("base_model_name_or_path") or ""
+    except (OSError, ValueError):
+        trained_on = ""
+    if trained_on and trained_on != STUDENT:
+        raise SystemExit(
+            "base mismatch: %s was trained on %s but --model selects %s.\n"
+            "  Merging onto the wrong base produces a broken model, so this is "
+            "refused. Re-run with --model %s, or retrain the adapter."
+            % (adapter_name, trained_on, STUDENT, trained_on))
+    if not trained_on:
+        print("[export] WARNING the adapter does not record its base; assuming %s"
+              % STUDENT, flush=True)
+    if args.hub:
+        am.require_known(STUDENT, "publishing")
+    print("[export] base model: %s" % am.describe(STUDENT), flush=True)
+    if not am.known(STUDENT):
+        print("[export] NOTE %s" % am.info(STUDENT)["notes"], flush=True)
     name = (args.name or adapter_name).strip()
     if not name or os.path.basename(name) != name:
         raise SystemExit("--name must be a bare slug (no separators): %r" % name)

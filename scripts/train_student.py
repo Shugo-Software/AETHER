@@ -24,7 +24,8 @@ from datasets import Dataset, load_dataset
 from transformers import AutoTokenizer
 
 import sysROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-STUDENT = "LiquidAI/LFM2.5-2.6B"
+import aether_models as am  # noqa: E402 - one place decides which base is trained
+STUDENT = am.DEFAULT
 END_MARK = "<|im_end|>\n"
 
 
@@ -35,6 +36,11 @@ def parse_args():
     ap.add_argument("--out", default=None,
                     help="adapter out dir (default: adapters/lfm25-<tag>)")
     ap.add_argument("--tag", default="p7a")
+    ap.add_argument("--model", default=None,
+                    help="base model to train (default: %s; see aether_models.py). "
+                         "The choice is recorded in the run state and in the "
+                         "adapter's config, so an export can refuse to merge it onto "
+                         "a different base" % am.DEFAULT)
     ap.add_argument("--resume", default=None,
                     help="existing adapter dir to continue from (e.g. "
                          "adapters/lfm25-jadis); loads its weights instead of "
@@ -273,15 +279,16 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 
 
 
-def load_tokenizer():
-    tok = AutoTokenizer.from_pretrained(STUDENT, trust_remote_code=True)
+def load_tokenizer(model=None):
+    tok = AutoTokenizer.from_pretrained(am.resolve(model), trust_remote_code=True)
     if tok.pad_token is None:
         tok.pad_token = tok.eos_token
     tok.padding_side = "right"
     return tok
 
 
-def load_qlora_model(lora_r, lora_alpha, single_dev, resume=None):
+def load_qlora_model(lora_r, lora_alpha, single_dev, resume=None, model=None):
+    base_id = am.resolve(model)
     bnb = BitsAndBytesConfig(
         load_in_4bit=True,
         bnb_4bit_quant_type="nf4",
@@ -295,7 +302,7 @@ def load_qlora_model(lora_r, lora_alpha, single_dev, resume=None):
         kw["device_map"] = {"": single_dev}
     else:
         kw["device_map"] = "auto"
-    model = AutoModelForCausalLM.from_pretrained(STUDENT, **kw)
+    model = AutoModelForCausalLM.from_pretrained(base_id, **kw)
     model = prepare_model_for_kbit_training(model)
     if resume:
         # Continue an existing adapter (e.g. jadis -> more data) instead of
@@ -477,6 +484,7 @@ def train_corpus(args, tok, model, ds_path, out_dir, state, *, phase=None,
                   "grad_accum": args.grad_accum, "lora_r": args.lora_r,
                   "lora_alpha": args.lora_alpha, "optim": "paged_adamw_8bit",
                   "precision": "fp16", "phase": phase,
+                  "base_model": am.resolve(getattr(args, "model", None)),
                   "answer_cut": dstats.get("answer_cut"),
                   "answer_cut_rows": dstats.get("answer_cut_rows"),
                   "metrics_file": os.path.basename(metrics_path or ""),
@@ -502,7 +510,7 @@ def main():
     args = parse_args()
     ds_path = pick_dataset(args.dataset)
     tag = args.tag
-    out_dir = args.out or os.path.join(ROOT, "adapters", "lfm25-" + tag)
+    out_dir = args.out or am.adapter_dir(tag)
     os.makedirs(out_dir, exist_ok=True)
     os.makedirs(os.path.join(ROOT, "logs"), exist_ok=True)
     state_path = os.path.join(ROOT, "logs", "train-%s.json" % tag)
@@ -529,16 +537,19 @@ def main():
         with open(state_path, "w", encoding="utf-8") as fh:
             json.dump(prev, fh, indent=2)
 
-    state(status="loading_tokenizer")
-    tok = load_tokenizer()
+    model_id = am.resolve(args.model)
+    state(status="loading_tokenizer", base_model=model_id)
+    print("[train] base model: %s" % am.describe(model_id), flush=True)
+    tok = load_tokenizer(model_id)
     dev = resolve_device(args)
-    state(status="loading_model", device=dev)
+    state(status="loading_model", device=dev, base_model=model_id)
     resume_dir = None
     if args.resume:
         resume_dir = os.path.abspath(args.resume)
         if not os.path.isfile(os.path.join(resume_dir, "adapter_config.json")):
             raise SystemExit("--resume %r has no adapter_config.json" % args.resume)
-    model = load_qlora_model(args.lora_r, args.lora_alpha, dev, resume=resume_dir)
+    model = load_qlora_model(args.lora_r, args.lora_alpha, dev,
+                             resume=resume_dir, model=model_id)
     model.print_trainable_parameters()
 
     # The single-corpus path is exactly one sweep phase, so it runs through the same

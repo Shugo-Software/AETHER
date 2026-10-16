@@ -40,6 +40,7 @@ aether_env.pin_caches()
 
 import recursive_train as rt  # noqa: E402 - run() + pass_rate(), one implementation
 import train_student as ts    # noqa: E402 - the trainer itself: one code path
+import aether_models as am    # noqa: E402 - which base model this sweep trains on
 
 ROOT = rt.ROOT
 LOGS = rt.LOGS
@@ -118,6 +119,9 @@ def parse_args(argv=None):
     ap = argparse.ArgumentParser(
         description="train several corpora back to back on one base-model load")
     ap.add_argument("--tag", default="jadis-pro")
+    ap.add_argument("--model", default=None,
+                    help="base model to train (default: %s); every phase keeps this "
+                         "one load, so the whole sweep is one base" % am.DEFAULT)
     ap.add_argument("--corpus", action="append", default=[],
                     help="fitted corpus; repeatable, and the order is the phase order")
     ap.add_argument("--phase-max-steps", type=int, default=60,
@@ -185,7 +189,7 @@ def main(argv=None):
                 state = json.load(fh)
         except (OSError, ValueError):
             pass
-    out_dir = os.path.join(ADAPTERS, a.tag)
+    out_dir = am.adapter_dir(a.tag)
     os.makedirs(out_dir, exist_ok=True)
     metrics_path = os.path.join(LOGS, "train-%s.metrics.jsonl" % a.tag)
     tstate_path = os.path.join(LOGS, "train-%s.json" % a.tag)
@@ -214,16 +218,18 @@ def main(argv=None):
 
     print("[sweep] %d phase(s) on one model load -> adapters/%s"
           % (len(corpora), a.tag), flush=True)
-    state_write(status="loading_tokenizer")
-    tok = ts.load_tokenizer()
+    state_write(status="loading_tokenizer", base_model=am.resolve(a.model))
+    print("[sweep] base model: %s" % am.describe(a.model), flush=True)
+    tok = ts.load_tokenizer(a.model)
     dev = ts.resolve_device(a)
-    state_write(status="loading_model", device=dev)
+    state_write(status="loading_model", device=dev, base_model=am.resolve(a.model))
     resume_dir = None
     if a.resume:
         resume_dir = os.path.abspath(a.resume)
         if not os.path.isfile(os.path.join(resume_dir, "adapter_config.json")):
             raise SystemExit("--resume %r has no adapter_config.json" % a.resume)
-    model = ts.load_qlora_model(a.lora_r, a.lora_alpha, dev, resume=resume_dir)
+    model = ts.load_qlora_model(a.lora_r, a.lora_alpha, dev, resume=resume_dir,
+                                model=a.model)
     model.print_trainable_parameters()
 
     offset, results = 0, []
