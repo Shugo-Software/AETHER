@@ -218,7 +218,22 @@ def main(argv=None):
 
     print("[sweep] %d phase(s) on one model load -> adapters/%s"
           % (len(corpora), a.tag), flush=True)
-    state_write(status="loading_tokenizer", base_model=am.resolve(a.model))
+    # The mask matters more than it looks. With several GPUs visible, bitsandbytes'
+    # 4-bit load and its transient allocations anchor on cuda:0 — and on this rig
+    # cuda:0 is the 4070 Ti the teacher lives on. Phase 1 died at step 6 on
+    # 2026-10-16 with 'CUDA out of memory ... GPU 0 has a total capacity of 11.99 GiB
+    # of which 0 bytes is free', while the 6 GB 1060 sat idle: the sweep had been
+    # started by hand without the mask the control plane always sets.
+    if not os.environ.get("CUDA_VISIBLE_DEVICES"):
+        raise SystemExit(
+            "CUDA_VISIBLE_DEVICES is not set, and this rig has three GPUs.\n"
+            "  Without the mask the trainer's allocations anchor on cuda:0 — the card\n"
+            "  the teacher runs on — so a long sweep dies with a CUDA OOM instead of\n"
+            "  using the 6 GB 1060. Set it the way the control plane does:\n"
+            "    $env:CUDA_VISIBLE_DEVICES='1'    # the 6 GB 1060, then run the sweep\n"
+            "  or launch through the dashboard / scripts\\run-train.cmd.")
+    state_write(status="loading_tokenizer", base_model=am.resolve(a.model),
+                visible_devices=os.environ.get("CUDA_VISIBLE_DEVICES"))
     print("[sweep] base model: %s" % am.describe(a.model), flush=True)
     tok = ts.load_tokenizer(a.model)
     dev = ts.resolve_device(a)
