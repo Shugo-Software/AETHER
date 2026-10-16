@@ -293,17 +293,28 @@ class MetricsCallback(TrainerCallback):
     Additive only — does not change training behaviour.
     """
 
-    def __init__(self, metrics_path):
+    def __init__(self, metrics_path, phase=None, corpus=None, offset=0):
         self.metrics_path = metrics_path
+        self.phase = phase
+        self.corpus = corpus
+        # Multi-corpus sweeps restart HF's step counter per phase. `offset` keeps
+        # the logged step monotonic across the whole sweep, so the dashboard's loss
+        # chart reads as one run instead of a sawtooth.
+        self.offset = offset
 
     def on_log(self, args, state, control, logs=None, **kwargs):
         if not logs:
             return
         import math
         rec = {"ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-               "step": state.global_step,
+               "step": self.offset + state.global_step,
                "epoch": round(state.epoch, 4) if state.epoch is not None else None,
-               "total": state.max_steps if state.max_steps not in (None, -1) else None}
+               "total": ((self.offset + state.max_steps)
+                         if state.max_steps not in (None, -1) else None)}
+        if self.phase is not None:
+            rec["phase"] = self.phase
+        if self.corpus:
+            rec["corpus"] = self.corpus
         for k in ("loss", "grad_norm", "learning_rate"):
             v = logs.get(k)
             if v is None:
@@ -325,6 +336,126 @@ class MetricsCallback(TrainerCallback):
             fh.flush()
 
 
+def build_trainer(args, tok, model, ds, dstats, out_dir, metrics_path, *,
+                  max_steps=None, epochs=None, phase=None, corpus=None, offset=0):
+    """TrainingArguments + Trainer for one corpus, plus the run's diagnostics.
+
+    One corpus gets one Trainer, so it also gets a fresh optimizer and a fresh
+    cosine schedule: momentum from one dataset's distribution never leaks into the
+    next phase of a sweep.
+    """
+    from transformers import (DataCollatorForLanguageModeling, Trainer,
+                              TrainingArguments)
+
+    targs = TrainingArguments(
+        output_dir=out_dir,
+        num_train_epochs=(args.epochs if epochs is None else epochs),
+        max_steps=(args.max_steps if max_steps is None else max_steps),
+        per_device_train_batch_size=args.batch,
+        gradient_accumulation_steps=args.grad_accum,
+        learning_rate=args.lr,
+        lr_scheduler_type="cosine",
+        warmup_steps=10,
+        logging_steps=1,
+        save_steps=50,
+        save_total_limit=2,
+        fp16=True,  # Pascal: fp16, never bf16
+        bf16=False,
+        optim="paged_adamw_8bit",
+        gradient_checkpointing=True,
+        report_to="none",
+        seed=42,
+    )
+    # Plain Trainer (not trl.SFTTrainer): trl 1.15's fused-LM-head patched
+    # forward needs a triton-compiled chunked kernel that is None on Pascal.
+    trainer = Trainer(model=model, args=targs, train_dataset=ds,
+                      processing_class=tok,
+                      data_collator=(DataCollatorForLanguageModeling(tok, mlm=False)
+                                     if args.prompt_loss == "full"
+                                     else CompletionCollator(tok)),
+                      callbacks=[MetricsCallback(metrics_path, phase=phase,
+                                                 corpus=corpus, offset=offset)])
+    # Diagnostic: HF derives the total step count from
+    # len(train_dataloader) // grad_accum, and both the progress bar and the
+    # dashboard's ETA read that total. Print what HF will actually do, so a
+    # dataset/steps mismatch is visible in the log instead of implied.
+    import math as _math
+    _epochs = args.epochs if epochs is None else epochs
+    _max_steps = args.max_steps if max_steps is None else max_steps
+    try:
+        _dl = trainer.get_train_dataloader()
+        _spe = max(len(_dl) // max(args.grad_accum, 1), 1)
+        print("[train] rows=%d dataset_rows=%d batch=%d grad_accum=%d "
+              "dataloader_batches=%d steps_per_epoch=%d epochs=%s "
+              "=> total_steps=%d (max_steps=%s)"
+              % (dstats["rows_in"], len(ds), args.batch, args.grad_accum, len(_dl),
+                 _spe, _epochs, _spe * int(_math.ceil(_epochs)), _max_steps),
+              flush=True)
+    except Exception as e:  # noqa: BLE001 — never let diagnostics block training
+        print("[train] dataloader diagnostic failed: %s" % e, flush=True)
+    print("[train] labels: prompt_loss=%s rows_used=%d/%d"
+          " dropped_no_answer=%d answer_token_share=%s"
+          % (args.prompt_loss, dstats["rows_used"], dstats["rows_in"],
+             dstats["dropped_no_answer"], dstats.get("answer_share")), flush=True)
+    if args.prompt_loss == "masked":
+        print("[train] only answer tokens carry gradient (%d of %s kept tokens)"
+              % (dstats.get("tokens_answer", 0), dstats.get("tokens_total")),
+              flush=True)
+    return trainer
+
+
+def train_corpus(args, tok, model, ds_path, out_dir, state, *, phase=None,
+                 max_steps=None, epochs=None, metrics_path=None,
+                 metrics_fresh=False, offset=0, phase_dir=None, resume_dir=None):
+    """One corpus: dataset -> trainer -> train -> save (+ a per-phase checkpoint).
+
+    Both entry points go through here: `main()` once (a single corpus, exactly as
+    before) and train_sweep.py per corpus — one base-model load, many corpora.
+    Returns a summary dict for the caller to record.
+    """
+    state(corpus=ds_path, status="preparing_data", phase=phase)
+    ds, dstats = build_hf_dataset(ds_path, tok, args.max_len,
+                                  mask_prompt=(args.prompt_loss == "masked"))
+    n_rows = dstats["rows_in"]
+    if metrics_fresh and metrics_path:
+        open(metrics_path, "w").close()   # fresh per run; appended across phases
+    trainer = build_trainer(args, tok, model, ds, dstats, out_dir, metrics_path,
+                            max_steps=max_steps, epochs=epochs, phase=phase,
+                            corpus=os.path.basename(ds_path), offset=offset)
+    _epochs = args.epochs if epochs is None else epochs
+    _max_steps = args.max_steps if max_steps is None else max_steps
+    state(corpus=ds_path, status="training", phase=phase, rows=n_rows,
+          rows_used=dstats["rows_used"], epochs=_epochs, lr=args.lr,
+          resumed_from=(os.path.relpath(resume_dir, ROOT) if resume_dir else None),
+          config={"dataset": os.path.basename(ds_path), "student": STUDENT,
+                  "epochs": _epochs, "lr": args.lr, "max_len": args.max_len,
+                  "prompt_loss": args.prompt_loss,
+                  "rows_used": dstats["rows_used"],
+                  "dropped_no_answer": dstats["dropped_no_answer"],
+                  "answer_token_share": dstats.get("answer_share"),
+                  "max_steps": _max_steps, "batch": args.batch,
+                  "grad_accum": args.grad_accum, "lora_r": args.lora_r,
+                  "lora_alpha": args.lora_alpha, "optim": "paged_adamw_8bit",
+                  "precision": "fp16", "phase": phase,
+                  "metrics_file": os.path.basename(metrics_path or ""),
+                  "resume": (os.path.relpath(resume_dir, ROOT)
+                             if resume_dir else None)})
+    result = trainer.train()
+    state(corpus=ds_path, status="saving", phase=phase,
+          train_loss=round(float(result.training_loss), 4))
+    trainer.save_model(out_dir)
+    if phase_dir:
+        # The checkpoint this phase is graded on: a full PEFT adapter, so the
+        # teacher's verdict is about the weights that existed at that moment.
+        trainer.save_model(phase_dir)
+    loss = round(float(result.training_loss), 4)
+    print("[train] corpus done loss=%.4f steps=%d rows=%d -> %s"
+          % (loss, int(result.global_step), n_rows, out_dir), flush=True)
+    return {"train_loss": loss, "steps": int(result.global_step), "rows": n_rows,
+            "rows_used": dstats["rows_used"], "corpus": ds_path, "phase": phase,
+            "out": out_dir, "phase_dir": phase_dir}
+
+
 def main():
     args = parse_args()
     ds_path = pick_dataset(args.dataset)
@@ -334,9 +465,11 @@ def main():
     os.makedirs(os.path.join(ROOT, "logs"), exist_ok=True)
     state_path = os.path.join(ROOT, "logs", "train-%s.json" % tag)
 
-    def state(**kw):
+    def state(corpus=None, **kw):
         # Merge with the existing file so once-written fields (e.g. config)
         # survive later status updates (saving/done) instead of being dropped.
+        # `corpus` names the corpus being worked on *now* (a sweep changes it per
+        # phase; a single-corpus run passes nothing and behaves as before).
         prev = {}
         try:
             with open(state_path, encoding="utf-8") as fh:
@@ -345,7 +478,7 @@ def main():
             prev = {}
         prev.update(kw)
         prev.setdefault("tag", tag)
-        prev["dataset"] = os.path.basename(ds_path)
+        prev["dataset"] = os.path.basename(corpus or ds_path)
         prev["out"] = os.path.relpath(out_dir, ROOT)
         # Every state names the process that wrote it, so a killed trainer is
         # visible as such instead of leaving status=training behind forever
@@ -366,87 +499,16 @@ def main():
     model = load_qlora_model(args.lora_r, args.lora_alpha, dev, resume=resume_dir)
     model.print_trainable_parameters()
 
-    state(status="preparing_data")
-    ds, dstats = build_hf_dataset(ds_path, tok, args.max_len,
-                                  mask_prompt=(args.prompt_loss == "masked"))
-    n_rows = dstats["rows_in"]
-
-    from transformers import DataCollatorForLanguageModeling, Trainer, TrainingArguments
-
-    targs = TrainingArguments(
-        output_dir=out_dir,
-        num_train_epochs=args.epochs,
-        max_steps=args.max_steps,
-        per_device_train_batch_size=args.batch,
-        gradient_accumulation_steps=args.grad_accum,
-        learning_rate=args.lr,
-        lr_scheduler_type="cosine",
-        warmup_steps=10,
-        logging_steps=1,
-        save_steps=50,
-        save_total_limit=2,
-        fp16=True,  # Pascal: fp16, never bf16
-        bf16=False,
-        optim="paged_adamw_8bit",
-        gradient_checkpointing=True,
-        report_to="none",
-        seed=42,
-    )
-    # Plain Trainer (not trl.SFTTrainer): trl 1.15's fused-LM-head patched
-    # forward needs a triton-compiled chunked kernel that is None on Pascal.
-    metrics_path = os.path.join(ROOT, "logs", "train-%s.metrics.jsonl" % tag)
-    open(metrics_path, "w").close()  # fresh per run
-    trainer = Trainer(model=model, args=targs, train_dataset=ds,
-                      processing_class=tok,
-                      data_collator=(DataCollatorForLanguageModeling(tok, mlm=False)
-                                     if args.prompt_loss == "full"
-                                     else CompletionCollator(tok)),
-                      callbacks=[MetricsCallback(metrics_path)])
-    state(status="training", rows=n_rows, rows_used=dstats["rows_used"],
-          epochs=args.epochs, lr=args.lr,
-          resumed_from=(os.path.relpath(resume_dir, ROOT) if resume_dir else None),
-          config={"dataset": os.path.basename(ds_path), "student": STUDENT,
-                  "epochs": args.epochs, "lr": args.lr, "max_len": args.max_len,
-                  "prompt_loss": args.prompt_loss,
-                  "rows_used": dstats["rows_used"],
-                  "dropped_no_answer": dstats["dropped_no_answer"],
-                  "answer_token_share": dstats.get("answer_share"),
-                  "max_steps": args.max_steps, "batch": args.batch,
-                  "grad_accum": args.grad_accum, "lora_r": args.lora_r,
-                  "lora_alpha": args.lora_alpha, "optim": "paged_adamw_8bit",
-                  "precision": "fp16", "metrics_file": os.path.basename(metrics_path),
-                  "resume": (os.path.relpath(resume_dir, ROOT)
-                             if resume_dir else None)})
-    # Diagnostic: HF derives the total step count from
-    # len(train_dataloader) // grad_accum, and both the progress bar and the
-    # dashboard's ETA read that total. Print what HF will actually do, so a
-    # dataset/steps mismatch is visible in the log instead of implied.
-    import math as _math
-    try:
-        _dl = trainer.get_train_dataloader()
-        _spe = max(len(_dl) // max(args.grad_accum, 1), 1)
-        print("[train] rows=%d dataset_rows=%d batch=%d grad_accum=%d "
-              "dataloader_batches=%d steps_per_epoch=%d epochs=%s "
-              "=> total_steps=%d (max_steps=%s)"
-              % (n_rows, len(ds), args.batch, args.grad_accum, len(_dl), _spe,
-                 args.epochs, _spe * int(_math.ceil(args.epochs)),
-                 args.max_steps), flush=True)
-    except Exception as e:  # noqa: BLE001 — never let diagnostics block training
-        print("[train] dataloader diagnostic failed: %s" % e, flush=True)
-    print("[train] labels: prompt_loss=%s rows_used=%d/%d"
-          " dropped_no_answer=%d answer_token_share=%s"
-          % (args.prompt_loss, dstats["rows_used"], dstats["rows_in"],
-             dstats["dropped_no_answer"], dstats.get("answer_share")), flush=True)
-    if args.prompt_loss == "masked":
-        print("[train] only answer tokens carry gradient (%d of %s kept tokens)"
-              % (dstats.get("tokens_answer", 0), dstats.get("tokens_total")),
-              flush=True)
-    result = trainer.train()
-    state(status="saving", train_loss=round(float(result.training_loss), 4))
-    trainer.save_model(out_dir)
-    state(status="done", train_loss=round(float(result.training_loss), 4))
-    print("[train] done loss=%.4f -> %s"
-          % (result.training_loss, out_dir), flush=True)
+    # The single-corpus path is exactly one sweep phase, so it runs through the same
+    # function train_sweep.py loops over: one implementation of "train a corpus",
+    # not two. Behaviour here is unchanged.
+    summary = train_corpus(
+        args, tok, model, ds_path, out_dir, state,
+        metrics_path=os.path.join(ROOT, "logs", "train-%s.metrics.jsonl" % tag),
+        metrics_fresh=True, resume_dir=resume_dir)
+    state(status="done", train_loss=summary["train_loss"])
+    print("[train] done loss=%.4f -> %s" % (summary["train_loss"], out_dir),
+          flush=True)
     return 0
 
 
