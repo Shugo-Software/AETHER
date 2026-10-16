@@ -39,7 +39,8 @@ aether_env.pin_caches()
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-STUDENT = "LiquidAI/LFM2.5-2.6B"
+import aether_models as am  # noqa: E402 - one place decides which base is trained
+STUDENT = am.DEFAULT
 END = "<|im_end|>\n"
 
 
@@ -63,7 +64,12 @@ def parse_args():
     ap.add_argument("--min-kept-prompt-chars", type=int, default=200,
                     help="do not trim a prompt below this many characters; a row that "
                          "cannot be trimmed this far is dropped instead")
-    ap.add_argument("--tokenizer", default=STUDENT)
+    ap.add_argument("--model", default=None,
+                    help="base model this corpus is being fitted for (default: %s). "
+                         "The tokenizer decides what 'fits in max_len' means, so it "
+                         "must be the one the run will train with" % am.DEFAULT)
+    ap.add_argument("--tokenizer", default=None,
+                    help="override the tokenizer id (default: the --model one)")
     ap.add_argument("--selftest", action="store_true",
                     help="offline checks (trim boundaries, markers, the fit guarantee)")
     return ap.parse_args()
@@ -186,7 +192,8 @@ def main():
         raise SystemExit("no such corpus: %s" % src)
     import train_student as ts
     from transformers import AutoTokenizer
-    tok = AutoTokenizer.from_pretrained(a.tokenizer, trust_remote_code=True)
+    tok = AutoTokenizer.from_pretrained(a.tokenizer or am.resolve(a.model),
+                                        trust_remote_code=True)
 
     def n_tokens(text):
         # The same call the trainer truncates with (special tokens included). A

@@ -40,7 +40,8 @@ import aether_env  # noqa: E402 - caches/temp stay on the repo drive (never C:)
 aether_env.pin_caches()
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-STUDENT = "LiquidAI/LFM2.5-2.6B"
+import aether_models as am  # noqa: E402 - one place decides which base is trained
+STUDENT = am.DEFAULT
 DATASET = os.path.join(ROOT, "datasets", "phase6_pilot1.jsonl")
 LOGS = os.path.join(ROOT, "logs")
 
@@ -66,6 +67,10 @@ def parse_args():
     ap.add_argument("--adapter", required=True,
                     help="adapter dir, e.g. adapters/jadis-1.0")
     ap.add_argument("--tag", default=None, help="report name (default: dir name)")
+    ap.add_argument("--model", default=None,
+                    help="base model the adapter was trained on (default: %s) — the "
+                         "base-vs-tuned comparison is meaningless against another one"
+                         % am.DEFAULT)
     ap.add_argument("--dataset", default=DATASET,
                     help="corpus for in-domain prompts + memory overlap")
     ap.add_argument("--in-domain", type=int, default=3,
@@ -258,7 +263,11 @@ def build_report(args, probes, results, conventions, tag):
 
 
 def main():
+    global STUDENT
     args = parse_args()
+    # The base is a choice, and every report below must name the one actually used.
+    STUDENT = am.resolve(args.model)
+    print("[eval] base model: %s" % am.describe(STUDENT), flush=True)
     tag = args.tag or os.path.basename(args.adapter.rstrip("/\\"))
     rows = load_rows(args.dataset)
     probes = pick_in_domain(rows, args.in_domain) + [dict(p) for p in OOD]

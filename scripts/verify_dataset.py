@@ -33,7 +33,8 @@ aether_env.pin_caches()
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-STUDENT = "LiquidAI/LFM2.5-2.6B"
+import aether_models as am  # noqa: E402 - one place decides which base is trained
+STUDENT = am.DEFAULT
 END_MARK = "<|im_end|>"
 
 
@@ -47,7 +48,11 @@ def parse_args():
     ap.add_argument("--samples", type=int, default=3,
                     help="how many rendered rows to show")
     ap.add_argument("--json", default=None, help="write the report as JSON here")
-    ap.add_argument("--tokenizer", default=STUDENT)
+    ap.add_argument("--model", default=None,
+                    help="base model to measure for (default: %s) — the tokenizer is "
+                         "what decides whether a row fits max_len" % am.DEFAULT)
+    ap.add_argument("--tokenizer", default=None,
+                    help="override the tokenizer id (default: the --model one)")
     return ap.parse_args()
 
 
@@ -318,7 +323,8 @@ def main():
         raise SystemExit("no such file: %s" % jsonl)
     import train_student  # the trainer's own renderer (single source of truth)
     from transformers import AutoTokenizer
-    tok = AutoTokenizer.from_pretrained(a.tokenizer, trust_remote_code=True)
+    tok = AutoTokenizer.from_pretrained(a.tokenizer or am.resolve(a.model),
+                                        trust_remote_code=True)
     rows = load_rows(jsonl)
     print("[verify] tokenizer=%s rows=%d" % (a.tokenizer, len(rows)), flush=True)
     summ, det = audit(rows, tok, a.max_len, train_student.format_record)

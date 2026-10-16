@@ -32,6 +32,7 @@ from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import aether_env  # noqa: E402 - caches/temp stay on the repo drive (never C:)
+import aether_models as am  # noqa: E402 - one place decides which base is trained
 aether_env.pin_caches()
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -69,6 +70,10 @@ def parse_args():
     ap = argparse.ArgumentParser(description="AETHER recursive train/review loop")
     ap.add_argument("--iteration", type=int, required=True)
     ap.add_argument("--tag", required=True, help="model/run tag, e.g. pro1")
+    ap.add_argument("--model", default=None,
+                    help="base model to train and export (default: %s); passed to "
+                         "train_student.py and export_model.py so the whole iteration "
+                         "is about one base" % am.DEFAULT)
     ap.add_argument("--corpus",
                     default=os.path.join(ROOT, "datasets", "phase6_pro1.jsonl"))
     ap.add_argument("--epochs", type=float, default=3.0)
@@ -243,7 +248,8 @@ def main():
                         "--grad-accum", str(args.grad_accum),
                         "--prompt-loss", args.prompt_loss]
                        + (["--max-steps", str(args.max_steps)]
-                          if args.max_steps and args.max_steps > 0 else []),
+                          if args.max_steps and args.max_steps > 0 else [])
+                       + (["--model", args.model] if args.model else []),
                        "loop-%s-it%d-train.log" % (args.tag, args.iteration),
                        extra_env={"CUDA_VISIBLE_DEVICES": TRAIN_CUDA_MASK})
         fresh = fresh_adapter(adapter_dir, t0)
@@ -282,6 +288,10 @@ def main():
         cmd = [PY, "-u", os.path.join(ROOT, "scripts", "export_model.py"),
                "--adapter", args.tag, "--name", args.tag,
                "--title", args.tag.upper(), "--gguf", "f16"]
+        if args.model:
+            # export_model refuses to merge onto a base the adapter was not trained
+            # on, so the loop must say which base it trained with.
+            cmd += ["--model", args.model]
         ok, tail = run(cmd, "loop-%s-it%d-export.log" % (args.tag, args.iteration))
         record["steps"]["export"] = {"ok": ok, "tail": tail, "quants": ["f16"]}
         if not ok:

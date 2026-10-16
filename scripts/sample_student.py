@@ -26,7 +26,8 @@ import aether_env  # noqa: E402 - caches/temp stay on the repo drive (never C:)
 aether_env.pin_caches()
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-STUDENT = "LiquidAI/LFM2.5-2.6B"
+import aether_models as am  # noqa: E402 - one place decides which base is trained
+STUDENT = am.DEFAULT
 
 DEFAULT_PROMPTS = [
     {"recipe": "explain_code",
@@ -48,6 +49,10 @@ SYSTEM = "You are a precise senior Python engineer. Be concrete and correct."
 
 def parse_args():
     ap = argparse.ArgumentParser(description="Sample a trained student adapter")
+    ap.add_argument("--model", default=None,
+                    help="base model the adapter was trained on (default: %s; the "
+                         "adapter records its own base in adapter_config.json)"
+                         % am.DEFAULT)
     ap.add_argument("--adapter", required=True,
                     help="path to adapter dir, e.g. adapters/lfm25-pilot1")
     ap.add_argument("--tag", default=None,
@@ -118,7 +123,9 @@ def generate_one(model, tok, prompt, args):
 
 
 def main():
+    global STUDENT
     args = parse_args()
+    STUDENT = am.resolve(args.model)
     tag = args.tag or os.path.basename(args.adapter.rstrip("\\/"))
     prompts = load_prompts(args.prompts_file)
     print("[sample] loading base + adapter %s" % args.adapter, flush=True)
