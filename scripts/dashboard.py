@@ -11,8 +11,10 @@ training; logic lives in train_control.py. The bind address is chosen with
 control plane to that network, so scope the firewall accordingly.
 """
 import html
+import inspect
 import json
 import os
+import re
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -33,7 +35,7 @@ PAGE_TOP = """<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
 <link rel="apple-touch-icon" href="/assets/aether-icon.png">
 <style>
 body{font-family:system-ui,Segoe UI,Roboto,sans-serif;background:#111418;
-color:#e6e9ee;margin:0 auto;max-width:1000px;padding:24px}
+color:#e6e9ee;margin:0 auto;max-width:1480px;padding:18px 22px}
 h1{font-size:22px;margin:0 0 4px}h2{font-size:16px;margin:28px 0 8px;color:#9fb4d8}
 .brand{display:flex;align-items:center;gap:14px;margin-bottom:10px}
 .brand img{width:56px;height:56px;flex:0 0 auto;
@@ -89,6 +91,22 @@ button.start{background:#58c184;color:#0b0d10}
 button.stop{background:#e5625e;color:#fff}
 button.act:disabled{opacity:.4;cursor:not-allowed}
 #ctl-status{font-size:13px;margin-top:8px;color:#b9c6dd}
+/* Two columns on a desktop screen, one on a narrow one. Each panel is one grid
+   item so a panel can never be split across the columns. */
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:12px 20px;align-items:start}
+.grid>.panel{min-width:0}
+.grid>.wide{grid-column:1/-1}
+@media(max-width:1200px){.grid{grid-template-columns:1fr}.grid>.wide{grid-column:auto}}
+.pair{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.bar-top{position:sticky;top:0;z-index:9;background:#0b0d10f2;
+border-bottom:1px solid #2a2f38;padding:7px 0 9px;margin-bottom:6px;
+display:flex;gap:18px;flex-wrap:wrap;font-size:13px}
+.bar-top b{color:#e6e9ee}
+details.collapse{background:#181c22;border:1px solid #2a2f38;border-radius:8px;
+padding:8px 12px;margin:12px 0}
+details.collapse>summary{cursor:pointer;color:#9fb4d8;font-weight:700;
+font-size:15px}
+details.collapse[open]>summary{margin-bottom:8px}
 </style></head><body>
 <div class="brand">
   <img src="/assets/aether-logo-dark-256.png" alt="AETHER">
@@ -140,6 +158,12 @@ def _training_header(snap):
             h.append('<div class="card ok">final loss %.4f</div>' % float(loss))
         except (ValueError, TypeError):
             pass
+    elif t.get("stale"):
+        # The state file says a run is in progress; the process that wrote it is
+        # gone, so say that instead of mirroring the claim.
+        h.append('<div class="card warn">stopped &mdash; the trainer process for '
+                 'this run is gone (log: %s)</div>'
+                 % html.escape(str(t.get("log_file") or "-")))
     elif status == "running":
         h.append('<div class="card active">training &middot; log: %s</div>'
                  % html.escape(str(t.get("log_file", "-"))))
@@ -253,17 +277,25 @@ def _queue_panel(snap):
     q = d.get('queue') or {}
     h = ['<h2>Dataset queue</h2>', '<div class="card">']
     act = q.get('active')
-    h.append('<div class="small">%d pending%s &middot; queue order is the order '
-             'they are trained in &middot; skipping keeps files, deleting is gated '
-             'on a passed iteration</div>'
-             % (q.get('pending', 0),
-                (' &middot; <b>working on %s</b>' % html.escape(str(act)))
-                if act else ''))
+    staled = q.get('stalled') or []
+    bits = '%d pending' % q.get('pending', 0)
+    if act:
+        bits += ' &middot; <b>working on %s</b>' % html.escape(str(act))
+    if staled:
+        bits += (' &middot; <span class="pill warn">stalled</span> %s '
+                 '(the runner that claimed these is gone &mdash; the queue '
+                 'resumes them at train)'
+                 % ', '.join(html.escape(str(s)) for s in staled))
+    h.append('<div class="small">%s &middot; queue order is the order they are '
+             'trained in &middot; skipping keeps files, deleting is gated on a '
+             'passed iteration</div>' % bits)
     h.append('<div class="ctl" style="margin-top:8px">')
     h.append('<label>add to queue<input id="queue-add" size="40" '
              'placeholder="https://huggingface.co/datasets/org/name"></label>')
     h.append('<button class="act start" id="queue-add-btn">Add</button>')
-    h.append('</div><div id="queue-status"></div>')
+    h.append('<button class="act" id="queue-plan-btn">Plan queue</button>')
+    h.append('</div><div id="queue-status"></div>'
+             '<pre id="queue-plan" style="display:none"></pre>')
     h.append('</div>')
 
     if not items:
@@ -279,6 +311,8 @@ def _queue_panel(snap):
                 else 'run' if it.get('active') else 'warn')
         pills = ['<span class="pill %s">%s</span>'
                  % (tone, html.escape(str(it.get('state'))))]
+        if it.get('stalled'):
+            pills.append('<span class="pill warn">stalled</span>')
         if it.get('active'):
             pills.append('<span class="pill run">active</span>')
         elif not it.get('pending'):
@@ -318,10 +352,18 @@ def _hf_panel(snap):
              '<option value="full">full</option><option value="train">train</option>'
              '<option value="all">all files</option></select></label>')
     h.append('<label>map<select id="hf-map">'
+             '<option value="auto">auto (detect)</option>'
              '<option value="chat">chat (messages)</option>'
              '<option value="flat">flat (prompt/answer)</option></select></label>')
-    h.append('<label>rows to keep<input id="hf-limit" type="number" value="2000"></label>')
+    h.append('<label add-big>&nbsp;<input id="hf-bigpull" type="checkbox"> '
+             'allow a huge pull</label>')
+    h.append('<label>rows to keep<input id="hf-limit" type="number" value="0" '
+             'title="0 = every row in the pulled copy — the default, because the '
+             'copy is already on G: and a cap here only loses data"></label>')
     h.append('<label>max-len<input id="hf-maxlen" type="number" value="1536"></label>')
+    h.append('<label>max steps<input id="hf-maxsteps" type="number" value="-1" '
+             'title="-1 = take the step budget from epochs; set a small number '
+             'for a smoke run"></label>')
     h.append('<button class="act start" id="hf-add">Link</button>')
     h.append('<button class="act start" id="hf-advance">Pull + prepare</button>')
     h.append('<button class="act start" id="hf-train">Train</button>')
@@ -356,7 +398,7 @@ def _hf_panel(snap):
                 pills.append('<span class="pill ok">gate %s</span>'
                              % html.escape(str(e['gate'].get('mean_pass'))))
             why = e.get('note') or ''
-            if e.get('audit'):
+            if not why and e.get('audit'):
                 a = e['audit']
                 why = ('%s &middot; scanned %s rows &middot; %s tool-call turns '
                        '&middot; %s marker drops &middot; %s records &middot; %s'
@@ -364,13 +406,13 @@ def _hf_panel(snap):
                           a.get('assistant_tool_call_turns'),
                           a.get('agentic_marker_drops'), a.get('records_matched'),
                           a.get('verdict', '')))
-            elif e.get('health'):
+            elif not why and e.get('health'):
                 hh = e['health']
                 why = ('%s rows &middot; answer-cut %s &middot; terminator %s%% '
                        '&middot; answer share %s'
                        % (hh.get('rows'), hh.get('answer_cut'),
                           hh.get('terminator_pct'), hh.get('answer_token_share')))
-            elif e.get('dropped'):
+            elif not why and e.get('dropped'):
                 why = 'dropped: %s' % json.dumps(e['dropped'])
             h.append('<tr><td class="small">%s<div class="small">%s</div></td>'
                      '<td>%s</td><td>%s</td><td>%s</td><td class="small">%s</td>'
@@ -381,9 +423,18 @@ def _hf_panel(snap):
                                         else (e.get('freed_human') or '-'))),
                         html.escape(str(e.get('fitted') or e.get('corpus') or '-')),
                         html.escape(why)))
-            for act, label in (('rewrite', 'rewrite'), ('verify', 'verify'),
-                               ('fit', 'fit'), ('train', 'train'),
-                               ('learned_verified', 'gate'), ('drop', 'delete')):
+            # Offer only the actions this dataset can actually run: `verify` with no
+            # corpus is a click that can only fail (it did, twice, and only showed
+            # up as "nothing converted yet" in a job log).
+            acts = [('rewrite', 'rewrite')]
+            if e.get('corpus'):
+                acts += [('verify', 'verify'), ('fit', 'fit')]
+            if e.get('fitted') or e.get('corpus'):
+                acts += [('train', 'train')]
+            if str(e.get('state')) in ('training', 'trained', 'learned_verified'):
+                acts.append(('learned_verified', 'gate'))
+            acts.append(('drop', 'delete'))
+            for act, label in acts:
                 h.append('<button class="hfrow" data-act="%s" data-repo="%s">%s</button>'
                          % (act, html.escape(e['id']), label))
             h.append('</td></tr>')
@@ -426,11 +477,49 @@ def render(snap):
              "bind %s, " % html.escape(BIND_HOST) +
              "snapshot " + html.escape(snap["updated_utc"]) + "</div>")
 
+    # Sticky strip: the answer to "what is happening right now" without scrolling.
+    # A stopped run must not display a step/ETA is if it were live: the metrics
+    # outlive the process that wrote them.
+    q = (snap.get("hfd") or {}).get("queue") or {}
+    teacher = next((e for e in (snap.get("endpoints") or [])
+                    if e.get("port") == 8080), {})
+    temps = " ".join("%s:%s&deg;C" % (g["index"], round(g["temp"]))
+                     for g in snap["gpus"]
+                     if isinstance(g.get("temp"), (int, float)))
+    run_state = str(t.get("state") or "")
+    if run_state in ("training", "saving", "preparing_data", "loading_model",
+                     "loading_tokenizer") and not t.get("stale"):
+        run_span = ('<span>step <b>%s</b></span><span>loss <b>%s</b></span>'
+                    '<span>eta <b>%s</b></span>'
+                    % (_step_total(m), _loss_now(m), _fmt_secs(m.get("eta_sec"))))
+    else:
+        run_span = ('<span>run <b>%s</b> %s</span>'
+                    % (html.escape(str(t.get("tag") or "-")),
+                       "stopped" if t.get("stale") else
+                       html.escape(run_state or "not started")))
+    h.append('<div class="bar-top">' + run_span +
+             '<span>queue <b>%s</b> pending%s</span>'
+             '<span>teacher <b class="%s">%s</b></span>'
+             '<span>gpus <b>%s</b></span></div>'
+             % (q.get("pending", 0),
+                (" &middot; active %s" % html.escape(str(q.get("active"))))
+                if q.get("active") else
+                (" &middot; <span class=\"warn\">stalled %s</span>"
+                 % html.escape(", ".join(q.get("stalled") or [])))
+                if q.get("stalled") else "",
+                "ok" if teacher.get("up") else "bad",
+                "up" if teacher.get("up") else "down",
+                temps or "-"))
+
+    h.append('<div class="grid">')
+    h.append('<div class="panel">')
+
     # Training (very top): stat cards + status + progress
     h.extend(_training_header(snap))
 
     # Training controls (start/stop/select dataset)
     ctrl = snap.get("control", {})
+    h.append('</div><div class="panel">')
     h.append("<h2>Training controls</h2>")
     h.append('<div class="card"><div class="ctl">')
     h.append('<label>dataset<select id="ctl-dataset">')
@@ -456,15 +545,19 @@ def render(snap):
     h.append("</div>")
 
     # Dataset queue (its own section: order, next step, reorder/skip)
+    h.append('</div><div class="panel">')
     h.extend(_queue_panel(snap))
 
     # What the model is learning (label masking + corpus health)
+    h.append('</div><div class="panel">')
     h.extend(_corpus_panel(snap))
 
     # Hugging Face datasets (link / pull to G: / prepare / train / release)
+    h.append('</div><div class="panel wide">')
     h.extend(_hf_panel(snap))
 
     # Export / push (merge LoRA -> standalone model -> optional GGUF/HF)
+    h.append('</div><div class="panel">')
     h.append("<h2>Export / push</h2>")
     h.append('<div class="card"><div class="ctl">')
     h.append('<label>adapter<select id="exp-adapter">')
@@ -494,6 +587,7 @@ def render(snap):
     h.append("</div>")
 
     # Phases
+    h.append('</div><div class="panel">')
     h.append("<h2>Phases</h2><table><tr><th>#</th><th>Goal</th>"
              "<th>Status</th><th>Doc</th></tr>")
     for p in snap["phases"]:
@@ -504,6 +598,7 @@ def render(snap):
     h.append("</table>")
 
     # Live GPUs (Machine)
+    h.append('</div><div class="panel">')
     h.append("<h2>Machine (GPUs, live)</h2>")
     g = snap["gpus"]
     if g and "error" not in g[0]:
@@ -542,6 +637,7 @@ def render(snap):
         h.append('<div class="card bad">nvidia-smi unavailable</div>')
 
     # Every llama-server endpoint (teacher + both students)
+    h.append('</div><div class="panel">')
     h.append("<h2>Model endpoints (live)</h2>")
     eps = snap.get("endpoints") or []
     if eps:
@@ -572,7 +668,12 @@ def render(snap):
     # Recursive loop: iterations and their gate decisions
     lp = snap.get("loop") or {}
     if lp.get("iterations"):
-        h.append("<h2>Recursive loop (iterations + gate)</h2>")
+        h.append('</div><div class="panel">')
+        # Name the run this record belongs to: it is the loop's own gate history,
+        # and it is not necessarily the tag the stat cards above are showing.
+        h.append("<h2>Recursive loop (iterations + gate)<span class=\"small\">"
+                 " &mdash; %s</span></h2>"
+                 % html.escape(str(lp.get("tag") or lp.get("file") or "?")))
         h.append('<table><tr><th>It</th><th>Corpus</th><th>Steps</th>'
                  "<th>Gate</th><th>Status</th></tr>")
         for it in lp["iterations"]:
@@ -608,6 +709,7 @@ def render(snap):
                  'teacher judge, not loss.</div>' % html.escape(str(lp.get("file"))))
 
     # Datasets
+    h.append('</div><div class="panel">')
     h.append("<h2>Datasets</h2>")
     ds = snap["datasets"]
     if ds:
@@ -622,6 +724,7 @@ def render(snap):
         h.append('<div class="card">no datasets yet</div>')
 
     # Training charts (stat cards + status live at the top of the page)
+    h.append('</div><div class="panel wide">')
     h.append("<h2>Training charts</h2>")
 
     # Run configuration
@@ -639,6 +742,7 @@ def render(snap):
         h.append('<div class="card small">(no run config recorded yet)</div>')
 
     # Loss curve (range filter)
+    h.append('<div class="pair"><div>')
     h.append("<h3>Loss curve</h3>")
     h.append('<div class="ranges" id="ranges">'
              '<button data-n="10">Last 10</button>'
@@ -646,28 +750,41 @@ def render(snap):
              '<button data-n="50">Last 50</button>'
              '<button data-n="0" class="on">All</button></div>')
     h.append('<div class="chartbox"><svg id="loss-chart"></svg></div>')
+    h.append('</div>')
 
     # Model health: grad norm + learning rate
+    h.append('<div>')
     h.append("<h3>Model health</h3>")
     h.append('<div class="small">grad_norm = how far each update moves the policy</div>')
     h.append('<div class="chartbox"><svg id="grad-chart"></svg></div>')
     h.append('<div class="small">learning rate</div>')
     h.append('<div class="chartbox"><svg id="lr-chart"></svg></div>')
+    h.append('</div></div>')
 
     # Live generations
-    h.append("<h3>Live generations</h3>")
+    h.append('<h3>Live generations <span class="small">(%s)</span></h3>'
+             % html.escape(str(t.get("samples_file") or "no samples recorded")))
     h.append('<div class="gen"><select id="gen-select"></select>'
              '<pre class="out" id="gen-out">(no samples yet - run '
              "scripts/sample_student.py after training)</pre></div>")
 
-    # Live log tail
-    h.append("<h3>Live log tail</h3>")
+    # Live log tail — the log of the run the cards above describe, by name, so a
+    # missing log reads as missing instead of borrowing another run's. Collapsed,
+    # because 30 lines of log make the page long without telling you anything the
+    # stat cards do not.
     log = t.get("log_tail", [])
+    h.append('<details class="collapse"><summary>Live log tail <span '
+             'class="small">(%s)</span></summary>'
+             % html.escape(str(t.get("log_file") or "no log recorded")))
     if log:
-        h.append("<pre>" + "\n".join(html.escape(str(x)) for x in log[-20:]) +
+        h.append("<pre>" + "\n".join(html.escape(str(x)) for x in log[-8:]) +
                  "</pre>")
     else:
-        h.append('<div class="card">(no log yet)</div>')
+        h.append('<div class="card">%s</div>'
+                 % html.escape(str(t.get("log_note") or "(no log yet)")))
+    h.append('</details>')
+
+    h.append("</div></div>")   # close the last .panel and the .grid
 
     # Embed initial data for the client-side poller (no-JS fallback shows server HTML).
     init = {"metrics": m, "samples": t.get("samples", []), "gpus": snap["gpus"],
@@ -855,7 +972,7 @@ function updateExport(x){
     esc(String(s.out||''))+(s.hub_url?(' → '+esc(s.hub_url)):'')+'</span>';}
   var lg=document.getElementById('exp-log');
   if(lg){if(x.log_tail&&x.log_tail.length){lg.style.display='block';
-    lg.textContent=x.log_tail.join('\n');}else{lg.style.display='none';}}
+    lg.textContent=x.log_tail.join('\\n');}else{lg.style.display='none';}}
 }
 function hfRun(action,repo){
   var el=document.getElementById('hf-status');
@@ -867,6 +984,8 @@ function hfRun(action,repo){
   var m=document.getElementById('hf-map'); if(m)body.map=m.value;
   var l=document.getElementById('hf-limit'); if(l)body.limit=parseInt(l.value);
   var ml=document.getElementById('hf-maxlen'); if(ml)body.max_len=parseInt(ml.value);
+  var ms=document.getElementById('hf-maxsteps'); if(ms)body.max_steps=parseInt(ms.value);
+  var bp=document.getElementById('hf-bigpull'); if(bp)body.allow_big=!!bp.checked;
   if(action==='drop'&&!window.confirm('Delete the local copy of '+repo_+' from the G: drive?'))return;
   if(el)el.innerHTML='<span class="ok">'+action+' starting…</span>';
   fetch('/api/hf/run',{method:'POST',headers:{'Content-Type':'application/json'},
@@ -876,6 +995,59 @@ function hfRun(action,repo){
     else{if(el)el.innerHTML='<span class="bad">'+action+' failed: '+(o.error||'?')+'</span>';}
     poll();
   }).catch(function(e){if(el)el.innerHTML='<span class="bad">request failed: '+e+'</span>';});
+}
+function hfPlan(){
+  var box=document.getElementById('queue-plan');
+  if(!box)return;
+  function val(id,def){var e=document.getElementById(id);
+    return (e&&e.value!=='')?e.value:def;}
+  var msg=document.getElementById('queue-status'); if(msg)msg.innerHTML='';
+  box.style.display='block'; box.textContent='planning…';
+  fetch('/api/hf/plan?limit='+val('hf-limit','0')+'&max_len='+
+        val('hf-maxlen','1536')+'&max_steps='+val('hf-maxsteps','-1')+'&remote=1'
+  ).then(function(r){return r.json();}).then(function(o){
+    if(o.error){box.textContent='plan failed: '+o.error;return;}
+    var out=[], st=o.settings||{};
+    out.push(o.pending+' pending'+(o.next?(', next '+o.next):'')+'   '+
+             (o.runnable?(o.can_train?'FULLY RUNNABLE'
+                                    :'INGEST RUNNABLE, TRAINING BLOCKED')
+                        :'WOULD NOT RUN'));
+    out.push('a run would use: limit='+((st.limit==null||!st.limit)?'all':st.limit)+
+             '  max_len='+(st.max_len==null?'-':st.max_len)+
+             '  max_steps='+((st.max_steps==null||st.max_steps<0)?'from epochs'
+                                                              :st.max_steps));
+    var items=o.items||[];
+    if(!items.length)out.push('queue is empty');
+    items.forEach(function(it){
+      var ev=it.evidence||{};
+      out.push('');
+      out.push((it.pos+1)+'. '+it.id+'  ['+it.state+']'+
+               (it.stalled?'  STALLED — its runner is gone':''));
+      out.push('   steps    : '+it.steps.join(' -> '));
+      if(it.pull){
+        out.push('   pull     : '+(it.pull.error
+          ? ('size unknown ('+it.pull.error+')')
+          : (it.pull.files+' file(s), '+(it.pull.bytes_human||'size not reported')+
+             (it.pull.big?'   <-- a corpus: needs "allow a huge pull"':''))));
+      }
+      out.push('   on disk  : '+ev.local_dir+'  '+ev.on_disk_human+
+               (ev.on_disk?'':'  (absent)'));
+      out.push('   corpus   : '+(ev.corpus||'-')+'  ('+
+               (ev.corpus_rows==null?'-':ev.corpus_rows+' rows')+')'+
+               ((ev.corpus_present||!ev.corpus)?'':'  MISSING'));
+      out.push('   fitted   : '+(ev.fitted||'-')+'  ('+
+               (ev.fitted_rows==null?'-':ev.fitted_rows+' rows')+')'+
+               ((ev.fitted_present||!ev.fitted)?'':'  MISSING'));
+      out.push('   artifacts: adapter='+ev.adapter_present+'  gguf='+
+               ((ev.gguf||[]).join(',')||'-')+'  gate='+
+               (ev.gate==null?'-':ev.gate));
+      (it.blockers||[]).forEach(function(b){out.push('   BLOCKER  : '+b);});
+      (it.gate_blockers||[]).forEach(function(b){
+        out.push('   BLOCKS   : training/gate only — '+b);});
+      (it.warnings||[]).forEach(function(w){out.push('   warn     : '+w);});
+    });
+    box.textContent=out.join('\\n');
+  }).catch(function(e){box.textContent='plan failed: '+e;});
 }
 function hfQueue(action,repo){
   var el=document.getElementById('queue-status');
@@ -927,6 +1099,8 @@ document.addEventListener('DOMContentLoaded',function(){
     else if(b.dataset.act){hfRun(b.dataset.act,b.dataset.repo);}});
   var qa=document.getElementById('queue-add-btn');
   if(qa)qa.addEventListener('click',function(){hfQueue('add');});
+  var qp=document.getElementById('queue-plan-btn');
+  if(qp)qp.addEventListener('click',hfPlan);
   poll(); setInterval(poll,5000);
 });
 </script>
@@ -972,6 +1146,27 @@ class Handler(BaseHTTPRequestHandler):
             self._asset("aether-icon.png")
         elif self.path == "/api/snapshot":
             self._json(200, _snap())
+        elif self.path.startswith("/api/hf/plan"):
+            # What the queue would do, item by item, without doing any of it.
+            # Read-only; the optional query (limit, max_len, max_steps, map,
+            # split) only fills the "a run would use these" summary.
+            import hf_datasets as hf
+            from urllib.parse import parse_qs
+            raw = parse_qs(self.path.partition("?")[2])
+            settings = {}
+            for key in ("limit", "max_len", "max_steps"):
+                try:
+                    settings[key] = int(raw[key][0])
+                except (KeyError, TypeError, ValueError):
+                    pass
+            for key in ("map", "split"):
+                if raw.get(key):
+                    settings[key] = raw[key][0]
+            remote = bool(raw.get("remote") and raw["remote"][0] not in ("", "0"))
+            self._json(200, hf.queue_plan(settings=settings, remote=remote))
+        elif self.path.startswith("/api/"):
+            # An unknown API path must not come back as a working-looking page.
+            self._json(404, {"ok": False, "error": "unknown endpoint"})
         else:
             body = render(_snap()).encode("utf-8")
             self.send_response(200)
@@ -1078,24 +1273,148 @@ class Handler(BaseHTTPRequestHandler):
                                    max_len=cfg.get("max_len"),
                                    max_steps=cfg.get("max_steps"),
                                    sample=cfg.get("sample"),
-                                   min_pass=cfg.get("min_pass"))
-                except Exception as e:  # noqa: BLE001 — surface, never 500
-                    self._json(409, {"ok": False, "error": str(e)})
+                                   min_pass=cfg.get("min_pass"),
+                                   allow_big=cfg.get("allow_big"))
+                except (SystemExit, Exception) as e:
+                    # SystemExit matters: spawn() refuses with it (a duplicate job
+                    # on the same dataset, a bad repo) and it is NOT an Exception,
+                    # so catching only Exception dropped the connection instead of
+                    # answering 409.
+                    msg = e.code if isinstance(e, SystemExit) and e.code else str(e)
+                    self._json(409, {"ok": False, "error": str(msg)})
                     return
             self._json(200, {"ok": True, "job": job})
         else:
             self._json(404, {"ok": False, "error": "unknown endpoint"})
 
 
+def _unescaped_quotes(line, quote):
+    """Count `quote` characters on a line that are not backslash-escaped."""
+    n, i = 0, 0
+    while i < len(line):
+        if line[i] == "\\":
+            i += 2          # an escaped char cannot close (or open) a literal
+            continue
+        if line[i] == quote:
+            n += 1
+        i += 1
+    return n
+
+
+def _selftest_snapshot():
+    """A minimal offline snapshot with the shape render() walks.
+
+    Hermetic on purpose: no nvidia-smi, no PowerShell, no network, no logs on
+    disk. The checks below are about the page we emit, not the data in it.
+    """
+    return {
+        "updated_utc": "1970-01-01T00:00:00+00:00",
+        "phases": [{"n": "1", "name": "selftest", "status": "done", "doc": None}],
+        "gpus": [{"index": "0", "name": "selftest GPU", "util": 0.0, "used": 0.0,
+                  "total": 1024.0, "pct": 0.0, "temp": None, "power": None}],
+        "host": {}, "endpoints": [], "loop": {}, "datasets": [],
+        "training": {"state": "not started", "detail": None, "log_tail": [],
+                     "samples": [], "config": None,
+                     "metrics": {"steps": [], "losses": [], "grad_norms": [],
+                                 "lrs": [], "step_time_s": None, "eta_sec": None}},
+        "corpus": {},
+        "hfd": {"datasets": [], "items": [],
+                "queue": {"pending": 0, "next": None, "active": None},
+                "jobs": [],
+                "storage": {"root": "cache/datasets", "total_human": "0 B",
+                            "free_human": "0 B", "orphans": []}},
+        "export": {"active": None, "status": None, "log_tail": []},
+        "control": {"datasets": [], "adapters": [], "active": None,
+                    "can_start": True},
+    }
+
+
+def selftest():
+    """Offline checks on the page the browser actually receives.
+
+    The dashboard is server-rendered, so a broken inline script still *looks*
+    complete to a substring test and only shows up in a browser as dead
+    buttons. The bug this exists for (found live 2026-10-15): JS_APP is a
+    non-raw Python string, so one `\\n` in a JS string literal became a real
+    newline when served, the <script> block died with "Invalid or unexpected
+    token", and every button on the page was dead while every panel rendered.
+    A JS string literal cannot span a source line, so an odd number of
+    unescaped quotes on a line is exactly that failure.
+    """
+    page = render(_selftest_snapshot())
+    ok = True
+
+    def check(good, label):
+        nonlocal ok
+        ok = ok and bool(good)
+        print("[selftest] %s %s" % ("ok  " if good else "FAIL", label))
+        return good
+
+    blocks = re.findall(r"<script[^>]*>(.*?)</script>", page, re.S)
+    check(len(blocks) >= 2, "inline script blocks present (%d)" % len(blocks))
+
+    for n, block in enumerate(blocks):
+        # Original line numbers, so a failure points at the served line; whole-line
+        # comments are skipped (an apostrophe in prose is not an unterminated string).
+        bad = [i + 1 for i, ln in enumerate(block.splitlines())
+               if not ln.strip().startswith("//")
+               and (_unescaped_quotes(ln, "'") % 2
+                    or _unescaped_quotes(ln, '"') % 2)]
+        check(not bad, "script %d: no string literal left open (lines %s)"
+              % (n, bad[:5]))
+        if block.lstrip().startswith("window.INIT"):
+            payload = block.split("=", 1)[1].rstrip().rstrip(";")
+            try:
+                json.loads(payload)
+                good, why = True, ""
+            except ValueError as e:
+                good, why = False, " (%s)" % e
+            check(good, "script %d: window.INIT is valid JSON%s" % (n, why))
+
+    ids = set(re.findall(r'id="([^"]+)"', page))
+    refs = [m[1] for m in
+            re.findall(r"getElementById\((['\"])([^'\"]+)\1\)", page)]
+    missing = sorted(set(r for r in refs if r not in ids))
+    check(not missing, "every getElementById target exists (%d refs%s)"
+          % (len(refs), ", missing: %s" % missing if missing else ""))
+
+    handler_src = inspect.getsource(Handler)
+    post_half = handler_src.split("def do_POST", 1)[-1]
+    posts = re.findall(r"fetch\(\s*'([^']+)'\s*,\s*\{\s*method\s*:\s*'POST'", page)
+    unknown = [p for p in posts if p not in post_half]
+    check(not unknown, "every POST fetch hits a real route (%d calls%s)"
+          % (len(posts), ", unknown: %s" % unknown if unknown else ""))
+    gets = re.findall(r"fetch\(\s*'([^']+)'\s*\)", page)
+    gets += re.findall(r"fetch\(\s*'([^']+)'\s*\+", page)
+    unknown = [p for p in gets if p.split("?")[0] not in handler_src]
+    check(not unknown, "every GET fetch hits a real route (%d calls%s)"
+          % (len(gets), ", unknown: %s" % unknown if unknown else ""))
+
+    print("[selftest] %s" % ("ALL OK" if ok else "FAILURES"))
+    return 0 if ok else 1
+
+
 def main():
     import argparse
     global BIND_HOST
+    try:
+        # The server and everything it spawns read/download datasets, so they must
+        # use the G: caches: C: is critically small (plan.md) and an inherited
+        # default put a parquet count on C: until it hit ENOSPC.
+        import hf_datasets as _hf
+        _hf.pin_caches()
+    except Exception:  # noqa: BLE001 — never refuse to start over a cache path
+        pass
     ap = argparse.ArgumentParser(description="AETHER dashboard")
     ap.add_argument("--port", type=int, default=8090)
     ap.add_argument("--host", default="127.0.0.1",
                     help="bind address (default 127.0.0.1 = loopback only; "
                          "0.0.0.0 exposes to all networks - scope the firewall!)")
+    ap.add_argument("--selftest", action="store_true",
+                    help="offline checks on the rendered page (no server starts)")
     args = ap.parse_args()
+    if args.selftest:
+        return selftest()
     BIND_HOST = args.host
     try:
         srv = ThreadingHTTPServer((args.host, args.port), Handler)

@@ -1,0 +1,50 @@
+{
+  "tag": "minimax-m2-1-code-sft",
+  "created_utc": "2026-10-16T00:43:30+00:00",
+  "purpose": "training",
+  "agentic_rows": 654,
+  "params": {
+    "source": null,
+    "repo": "11-47/MiniMax-M2.1-Code-SFT",
+    "map_": "auto",
+    "turn_mode": "last",
+    "agentic": "keep",
+    "from_local": "G:\\Program Prototype\\AETHER\\cache\\datasets\\11-47--MiniMax-M2.1-Code-SFT",
+    "from_local_files": "minimax-m2.1-agent-sft.jsonl",
+    "local_pattern": null,
+    "eval_only": false,
+    "tag": "minimax-m2-1-code-sft",
+    "split": "full",
+    "limit": 0,
+    "scan_limit": 0,
+    "max_prompt_chars": 4000,
+    "max_completion_chars": 4000,
+    "max_fences": 3,
+    "max_reasoning_chars": 2000
+  },
+  "source": {
+    "repo": "11-47/MiniMax-M2.1-Code-SFT",
+    "split": "full",
+    "revision": "e96ff0a949b0bbc31de6acee4cf9005f81b73193"
+  },
+  "counts": {
+    "scanned": 1306,
+    "written": 654,
+    "dropped": {
+      "agentic_marker": 198,
+      "assistant_tool_calls": 20,
+      "completion_too_long": 16,
+      "prompt_too_long": 106,
+      "too_many_code_fences": 312
+    }
+  },
+  "completion_chars": {
+    "min": 258,
+    "median": 1695,
+    "max": 3119
+  },
+  "output": {
+    "jsonl": "datasets\\minimax-m2-1-code-sft.jsonl",
+    "sha256": "4fad035723c142e2ce2148b0ada5503b2a1a9687ccd8b768a34ca9ab2f9dd815"
+  }
+}

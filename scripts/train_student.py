@@ -1,8 +1,8 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 """Phase 7 part 1/3: config + dataset prep for LFM2.5-2.6B QLoRA."""
 from __future__ import annotations
 # TAG-P7A
-"""Phase 7 â€” LFM2.5-2.6B QLoRA on the 1060(s). Part A: config + data prep.
+"""Phase 7 — LFM2.5-2.6B QLoRA on the 1060(s). Part A: config + data prep.
 
 Pascal rules (verified constraints): fp16 only (no bf16), no flash-attn,
 torch 2.14.0+cu126 pinned, single-6GB-card default with optional
@@ -60,7 +60,7 @@ def pick_dataset(explicit):
     cands = sorted(glob.glob(os.path.join(ROOT, "datasets", "*.jsonl")),
                    key=os.path.getmtime)
     if not cands:
-        raise SystemExit("no datasets/*.jsonl found â€” run Phase 6 first")
+        raise SystemExit("no datasets/*.jsonl found — run Phase 6 first")
     return cands[-1]
 
 
@@ -341,6 +341,10 @@ def main():
         prev.setdefault("tag", tag)
         prev["dataset"] = os.path.basename(ds_path)
         prev["out"] = os.path.relpath(out_dir, ROOT)
+        # Every state names the process that wrote it, so a killed trainer is
+        # visible as such instead of leaving status=training behind forever
+        # (the dashboard reconciles the two; seen 2026-10-15).
+        prev["pid"] = os.getpid()
         with open(state_path, "w", encoding="utf-8") as fh:
             json.dump(prev, fh, indent=2)
 

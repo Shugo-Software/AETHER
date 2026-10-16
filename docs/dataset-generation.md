@@ -161,19 +161,115 @@ added → pulled → converted → verified → fitted → training → learned_
   local copy is what makes another attempt possible.
 - **drop** — deletes the copy, records how many bytes were freed.
 
+**Full ingestion is the default (2026-10-15).** The pipeline pulls the dataset to
+G: and then parses *the whole local copy*: `--limit 0` (the default) converts
+every row, the scan is never capped, and every shard of the chosen split is read.
+Four caps used to sit in this path, and each one made a full pull look like a
+partial dataset:
+
+| Cap | What it did |
+|---|---|
+| `--limit 2000` | wrote 2,000 rows and stopped |
+| `--scan-limit 20000` | only examined the first 20,000 source rows — `convert` never even passed the flag |
+| "keep the biggest file" | turned a 20-shard split into one file |
+| `full` guessed as `full/train.jsonl` | downloaded **nothing** on a card with no `full` branch, then reported `pulled rows=0` |
+
+Behind those, `--map chat` on a flat dataset dropped every row
+(`no_user_or_assistant: 7473`) — which reads as "unusable data" when the data is
+fine. `--map` now defaults to `auto` and detects chat vs flat from the first row.
+
+Measured on the local gsm8k copy (7,473 rows in `main/train-*.parquet`):
+`scanned=7473 written=7473 dropped={}` — against exactly **2,000 rows** with the
+old default. Caps are now opt-in and stay honest: `--limit 2000` still gives
+`scanned=2001 written=2000`.
+
+**Failures that say what they are (2026-10-15).** `convert failed rc=1` covered
+three different things. The ingester's manifest now decides the state:
+
+| Outcome | Recorded as |
+|---|---|
+| rows written | `converted` |
+| 0 rows, drops counted | `not_trainable`, with the reason in words — *"mapped 0 of 1306 rows — tools_present (1306/1306 — every row carries a tool schema)"* |
+| no manifest at all | `error` — "no manifest written", with the log tail |
+
+`advance` stops after such a verdict instead of failing at `verify`, and the queue
+moves on to the next dataset instead of dying with the run.
+
+**Agentic traces are mined, not refused (decision, 2026-10-15).** A row carrying a
+tool schema used to be dropped whole; its plain assistant answers are exactly the
+self-contained pairs a student can learn from, so they are kept now
+(`--agentic keep`, the default) while every tool-call turn is still skipped.
+Measured on `11-47/MiniMax-M2.1-Code-SFT`: **1306 agentic rows → 654 records**
+(median answer 1695 chars) where all 1306 were previously refused. Each record
+carries `provenance.agentic`, the manifest records `agentic_rows`, and the caveat
+is written into the registry note and the job log — *their prompts contain tool
+results the student cannot produce itself, so weigh the gate accordingly*.
+`--agentic drop` restores the refusal. The other drops are visible and tunable:
+`too_many_code_fences 312` (over `--max-fences 3`), `agentic_marker 198`,
+`prompt_too_long 106`.
+
+**Where the caches go (2026-10-15).** The ingester always pinned the HF caches to
+G:, but `pull()`/`count_rows()` (in-process) and the `verify`/`fit`/`rewrite`
+subprocesses did not — they inherited the venv default on **C:, which had 0.5 GB
+free**. That is how counting one parquet shard died with
+`OSError: [Errno 28] No space left on device` while G: held 1.6 TB. Now
+`cache_env()`/`pin_caches()` put every ingestion process (the dashboard included)
+on the G: caches, and a parquet row count reads the **footer**
+(`pyarrow.parquet.ParquetFile(p).metadata.num_rows`) instead of materialising the
+file into an arrow cache.
+
+**A pull says how big it is first (2026-10-15).** `pull()` logs the file count and
+bytes before fetching, says so when the card reports no sizes (the space guard
+cannot run on an unknown size), and **refuses more than 50 files or 50 GB** unless
+`--allow-big-pull` (or the panel's *allow a huge pull* box) is given.
+`--queue-plan --remote` asks the hub up front: *"863 file(s), size not reported by
+the card — a corpus, not a training set"*.
+
+**One job per dataset.** `spawn()` refuses a second job on a repo a live job
+already owns (409, with the pid), and a dashboard-spawned job no longer records
+itself twice in the jobs feed — two rows for one click read like two downloads.
+
+**Check before you pay.** `--queue-plan` (and the panel's **Plan queue** button,
+`GET /api/hf/plan`) prints, per pending item, the stages the runner would execute,
+what is on disk for it — pulled size, corpus and fitted rows, adapter/GGUF
+artifacts, gate so far — and the preconditions that would fail. Preconditions come
+in two kinds, and the split matters: a **BLOCKER** stops the item, while **BLOCKS:
+training/gate only** (a down teacher on `:8080`) stops just the training tail.
+Ingestion is local work on a copy already on G:, so it is never held up by a
+service the gate needs hours later: the run does `pull → convert → verify → fit`,
+then refuses to start the training loop (exit 3; `--force` overrides) and leaves
+the corpus fitted on disk, so a later run resumes at `train`. `queue_run` also
+never starts a second runner for an item that already has one.
+For an end-to-end check of the machinery, bound it — `--limit 8 --max-steps 2`
+still runs every stage (train → export → quantize → serve → review → gate) in
+minutes; on eight rows the gate result is meaningless, and a fail keeps the local
+copy, so nothing is deleted.
+
 ```powershell
 python scripts\hf_datasets.py --add https://huggingface.co/datasets/org/name
-python scripts\hf_datasets.py --advance org/name --split full --map chat --tag myrun
+python scripts\hf_datasets.py --advance org/name --split full --map auto --tag myrun
 python scripts\hf_datasets.py --train org/name
 python scripts\hf_datasets.py --learned-verified org/name
 python scripts\hf_datasets.py --drop org/name --yes
+python scripts\hf_datasets.py --queue-plan          # what the queue would do (dry run)
 python scripts\hf_datasets.py --queue-run          # one dataset after another
-python scripts\hf_datasets.py --selftest           # URL parsing, registry, drop gate
+python scripts\hf_datasets.py --selftest           # URL parsing, registry, drop gate, queue lock, resume decision
 ```
 
 The same actions are in the dashboard ("Hugging Face datasets" panel: link, pull +
 prepare, train, run queue, per-row verify/fit/train/gate/delete), where a slow
-multi-GB pull runs detached and its log tail shows in "Pipeline jobs".
+multi-GB pull runs detached and its log tail shows in "Pipeline jobs". Every
+detached runner is recorded there — the web-spawned jobs *and* `train()` /
+`--queue-run` started from a console.
+
+**The queue's lock is self-healing (2026-10-15).** An item in an in-flight state is
+locked (reorder/skip refused with 409) only while the process that claimed that
+state is **alive and still ours**: `train()` records the loop pid, and the pid is
+re-checked against its own command line, because Windows recycles pids (the gsm8k
+loop pid had come back as `Code.exe`, which made a dead run look alive). A dataset
+whose runner is gone shows as **stalled**, keeps its ▲ ▼ skip buttons, and
+`--queue-run` resumes it at **train** — the fitted corpus is still on disk, so it
+does not re-pull and re-derive it. An item with no recorded owner keeps its lock.
 
 ### Two measured verdicts (2026-10-15)
 

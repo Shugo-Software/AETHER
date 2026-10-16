@@ -24,8 +24,13 @@ solution), never for training, and lives under datasets/eval/ which the training
 control plane refuses to launch.
 
 Usage:
-  python scripts/ingest_hf_dataset.py --source fable --limit 500
+  python scripts/ingest_hf_dataset.py --from-local <dir> --repo org/name --map chat
+  python scripts/ingest_hf_dataset.py --source fable           # --limit 0 = all rows
   python scripts/ingest_hf_dataset.py --source openai-math
+
+`--limit` / `--scan-limit` default to 0 (no cap): the pulled copy is on G: and
+free to read, so a cap there only loses data. Give them a number to build a small
+pilot corpus on purpose.
 """
 from __future__ import annotations
 
@@ -106,12 +111,17 @@ def parse_args():
                          "any dataset by id/URL.")
     ap.add_argument("--repo", default=None,
                     help="any HF dataset id (org/name) to ingest")
-    ap.add_argument("--map", dest="map_", default=None, choices=["chat", "flat"],
+    ap.add_argument("--map", dest="map_", default="auto",
+                    choices=["auto", "chat", "flat"],
                     help="chat: rows carry a `messages` list (one record per "
                          "assistant turn). flat: plain prompt/answer columns.")
     ap.add_argument("--turn-mode", default="last", choices=["last", "all"],
                     help="chat mapping: emit only the final assistant turn "
                          "(clearest target) or every assistant turn")
+    ap.add_argument("--agentic", choices=["keep", "drop"], default="keep",
+                    help="agentic rows (a tool schema plus tool-call turns): "
+                         "'keep' extracts their plain assistant answers and marks "
+                         "them in provenance (default), 'drop' refuses the row")
     ap.add_argument("--from-local", default=None,
                     help="dir of a pulled copy — read it instead of the hub")
     ap.add_argument("--from-local-files", default=None,
@@ -124,10 +134,11 @@ def parse_args():
                     help="output name (default: fable-pilot / openai-math)")
     ap.add_argument("--split", default=None,
                     help="override the split (fable: train|full, math: test)")
-    ap.add_argument("--limit", type=int, default=500,
-                    help="max records to WRITE (fable default 500)")
-    ap.add_argument("--scan-limit", type=int, default=20000,
-                    help="max source rows to examine")
+    ap.add_argument("--limit", type=int, default=0,
+                    help="max records to WRITE (0 = all rows; the local copy is "
+                         "free to read, so a cap here only loses data)")
+    ap.add_argument("--scan-limit", type=int, default=0,
+                    help="max source rows to examine (0 = all)")
     ap.add_argument("--max-prompt-chars", type=int, default=4000)
     ap.add_argument("--max-completion-chars", type=int, default=4000)
     ap.add_argument("--max-fences", type=int, default=3,
@@ -165,7 +176,8 @@ def ingest_fable(args, seen, drops):
     records, scanned = [], 0
     for row in stream:
         scanned += 1
-        if scanned > args.scan_limit or len(records) >= args.limit:
+        if (args.scan_limit and scanned > args.scan_limit) or \
+                (args.limit and len(records) >= args.limit):
             break
         if row.get("tools"):
             drops["tools_present"] += 1
@@ -298,7 +310,21 @@ def local_jsonl_files(args):
                 seen.add(f)
                 out.append(f)
     if not args.from_local_files and not args.local_pattern and len(out) > 1:
-        out = [max(out, key=os.path.getsize)]
+        # A repo that ships the same rows twice (5k/ and 10k/) must not be
+        # ingested twice — but every SHARD of the chosen split has to be read, or
+        # a sharded dataset silently loses rows (20 parquet files became one).
+        groups = {}
+        for f in out:
+            groups.setdefault(os.path.dirname(f), []).append(f)
+
+        def total(paths):
+            return sum(os.path.getsize(p) for p in paths)
+        best = max(groups, key=lambda d: total(groups[d]))
+        if len(groups) > 1:
+            print("[ingest] %d splits on disk (%s) — reading %s (%d file(s))"
+                  % (len(groups), ", ".join(sorted(groups)), best or "(root)",
+                     len(groups[best])), flush=True)
+        out = sorted(groups[best])
     if not out:
         raise SystemExit("no .jsonl/.parquet found under %s" % root)
     return out
@@ -381,7 +407,16 @@ def map_chat(row, args, seen, drops, repo, split, idx):
     if row is None:
         drops["unparsable_json"] += 1
         return []
-    if row.get("tools"):
+    # An agentic row (a tool schema, tool-call turns, tool results) is still worth
+    # mining: its PLAIN assistant turns are self-contained answers, and every
+    # tool-call turn is skipped below. `--agentic drop` restores the old refusal.
+    # The caveat is recorded per record (provenance.agentic) and counted in the
+    # manifest, because such a prompt shows tool results the student cannot
+    # produce itself.
+    agentic = bool(row.get("tools")) or any(
+        (m or {}).get("tool_calls")
+        for m in (row.get("messages") or []) if isinstance(m, dict))
+    if agentic and args.agentic == "drop":
         drops["tools_present"] += 1
         return []
     msgs = [m for m in (row.get("messages") or []) if isinstance(m, dict)]
@@ -433,6 +468,10 @@ def map_chat(row, args, seen, drops, repo, split, idx):
                      "reasoning_chars": len(reason or ""),
                      "messages_before": t, "messages_total": len(msgs)},
         }
+        if agentic:
+            # Per-record, so the caveat travels with the data and the corpus can
+            # be filtered on it later.
+            rec["provenance"]["agentic"] = True
         if reason:
             rec["reasoning"] = reason    # format_record renders <think>…</think>
         out.append(rec)
@@ -494,10 +533,16 @@ def ingest_generic(args, seen, drops):
     repo = args.repo
     split = args.split or "train"
     mapping = args.map_
+    if mapping in (None, "", "auto"):
+        # Detect from the first row instead of guessing: `--map chat` on a flat
+        # dataset (gsm8k's question/answer parquet) drops every single row, which
+        # looks exactly like "the dataset is unusable" when it is not.
+        mapping = None
     records, scanned = [], 0
     for idx, row in iter_source(args, repo):
         scanned += 1
-        if scanned > args.scan_limit or len(records) >= args.limit:
+        if (args.scan_limit and scanned > args.scan_limit) or \
+                (args.limit and len(records) >= args.limit):
             break
         if mapping is None and isinstance(row, dict):
             mapping = "chat" if isinstance(row.get("messages"), list) else "flat"
@@ -507,7 +552,7 @@ def ingest_generic(args, seen, drops):
         else:
             recs = map_flat(row, args, seen, drops, repo, split, idx)
         for r in recs:
-            if len(records) >= args.limit:
+            if args.limit and len(records) >= args.limit:
                 break
             r["id"] = "h-%06d" % len(records)
             records.append(r)
@@ -520,7 +565,7 @@ def ingest_math(args, seen, drops):
     stream = load_dataset(MATH_REPO, split=args.split or "test", streaming=True)
     records = []
     for i, row in enumerate(stream):
-        if len(records) >= args.limit:
+        if args.limit and len(records) >= args.limit:
             break
         meta = row.get("metadata") or {}
         instr = (row.get("instruction") or "").strip()
@@ -580,10 +625,16 @@ def write_output(args, records, drops, scanned):
             fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
 
     comp = sorted(len(r["completion"]) for r in records) or [0]
+    # Rows mined out of agentic traces (tool schemas / tool-call turns): their
+    # plain answers are kept, but their prompts show tool results a student cannot
+    # produce, so the count travels with the manifest.
+    agentic = sum(1 for r in records
+                  if (r.get("provenance") or {}).get("agentic"))
     manifest = {
         "tag": tag,
         "created_utc": now(),
         "purpose": purpose,
+        "agentic_rows": agentic,
         "params": dict(vars(args)),
         "source": {"repo": repo, "split": args.split or "default",
                    "revision": revision(repo)},
@@ -597,6 +648,11 @@ def write_output(args, records, drops, scanned):
     man_path = os.path.join(out_dir, tag + ".manifest.json")
     with open(man_path, "w", encoding="utf-8") as fh:
         json.dump(manifest, fh, indent=2, ensure_ascii=False)
+    if agentic:
+        print("[ingest] NOTE: %d of %d rows come from agentic traces — their "
+              "prompts contain tool results the student cannot produce itself; "
+              "weigh the gate accordingly (--agentic drop excludes them)."
+              % (agentic, len(records)), flush=True)
     return out_path, man_path, manifest
 
 

@@ -225,18 +225,31 @@ def _flatten_steps(steps):
     return out
 
 
-def loop_state():
-    """The recursive loop's own record: iterations, gates, and what it queued."""
-    files = sorted(glob.glob(os.path.join(ROOT, 'logs', 'loop-*.json')),
-                   key=os.path.getmtime)
-    if not files:
-        return {'file': None, 'iterations': []}
-    path = files[-1]
+def _loop_tag(path):
+    """The tag a loop-<tag>.json belongs to."""
+    base = os.path.basename(path or '')
+    if base.startswith('loop-') and base.endswith('.json'):
+        return base[len('loop-'):-len('.json')]
+    return None
+
+
+def loop_state(path=None):
+    """The recursive loop's own record: iterations, gates, and what it queued.
+
+    `path` is the loop file belonging to the run the rest of the page shows;
+    without it the newest loop wins (loop-selftest.json is a fixture, never a
+    run, so _newest() never returns it).
+    """
+    if path is None:
+        path = _newest(['loop-*.json'])
+    if not path:
+        return {'file': None, 'tag': None, 'iterations': []}
     try:
         with open(path, encoding='utf-8') as fh:
             state = json.load(fh)
     except (OSError, ValueError):
-        return {'file': os.path.basename(path), 'iterations': []}
+        return {'file': os.path.basename(path), 'tag': _loop_tag(path),
+                'iterations': []}
     iters = []
     for it in state.get('iterations', []):
         gate = it.get('gate') or {}
@@ -254,7 +267,8 @@ def loop_state():
                      'floor': gate.get('floor'),
                      'clears_floor': gate.get('clears_floor'),
                      'no_regression': gate.get('no_regression')}})
-    return {'file': os.path.basename(path), 'iterations': iters}
+    return {'file': os.path.basename(path),
+            'tag': state.get('tag') or _loop_tag(path), 'iterations': iters}
 
 
 def teacher_state():
@@ -309,36 +323,119 @@ def _read_jsonl(path):
     return rows
 
 
-def training_status():
+# States a trainer writes *while it is working*. If the process behind them is
+# gone the run was killed, and the panel must say so rather than repeat the claim
+# (seen 2026-10-15: status=training, trainer dead, nothing training).
+_LIVE_STATES = ('loading_tokenizer', 'loading_model', 'preparing_data',
+                'training', 'saving')
+
+
+def _trainer_alive(pid):
+    """Is the process that wrote a training state still running and still ours?"""
+    try:
+        import hf_datasets as hf
+        return hf.process_alive(pid)
+    except Exception:  # noqa: BLE001 — never break the page over a liveness probe
+        return None
+
+
+def _newest(patterns, exclude=('train-active.json', 'loop-selftest.json')):
+    """The newest file matching any pattern under logs/ (never a runtime pointer)."""
+    files = []
+    for pat in patterns:
+        files += glob.glob(os.path.join(ROOT, 'logs', pat))
+    files = [f for f in files if os.path.basename(f) not in exclude]
+    return max(files, key=os.path.getmtime) if files else None
+
+
+def _run_files():
+    """The newest training run, and the artifacts belonging to *that* run.
+
+    Each panel used to pick its own file by newest mtime, so one page could show
+    iteration 2's stat cards beside iteration 1's log tail, a third tag's
+    samples and an unrelated loop's gate decision (seen live 2026-10-15). The
+    state file names the run; everything else is keyed to its tag.
+    """
+    state_file = _newest(['train-*.json'])
+    tag = None
+    if state_file:
+        try:
+            with open(state_file, encoding='utf-8') as fh:
+                tag = (json.load(fh) or {}).get('tag')
+        except (OSError, ValueError):
+            tag = None
+        if not tag:
+            base = os.path.basename(state_file)
+            if base.startswith('train-') and base.endswith('.json'):
+                tag = base[len('train-'):-len('.json')]
+    runs = {'log': None, 'metrics': None, 'samples': None, 'loop': None}
+    if tag:
+        # The recursive loop tees the trainer to loop-<tag>-it<N>-train.log, so
+        # a tag whose own train-<tag>.log was never written still has a log.
+        runs['log'] = (_newest(['train-%s.log' % tag])
+                       or _newest(['loop-%s-it*-train.log' % tag,
+                                   'hf-train-%s.log' % tag]))
+        runs['metrics'] = _newest(['train-%s.metrics.jsonl' % tag])
+        runs['samples'] = _newest(['train-%s.samples.json' % tag])
+        runs['loop'] = _newest(['loop-%s.json' % tag])
+    return state_file, tag, runs
+
+
+def training_status(state_file=None, tag=None, runs=None):
+    if state_file is None:
+        state_file, tag, runs = _run_files()
+    runs = runs or {}
     out = {'state': 'not started', 'detail': None, 'log_tail': [], 'losses': [],
            'epochs': [], 'metrics': {'steps': [], 'losses': [], 'grad_norms': [],
                                      'lrs': [], 'step_time_s': None,
-                                     'eta_sec': None}, 'samples': [], 'config': None}
-    states = sorted(glob.glob(os.path.join(ROOT, 'logs', 'train-*.json')), key=os.path.getmtime)
-    logs = sorted(glob.glob(os.path.join(ROOT, 'logs', 'train-*.log')), key=os.path.getmtime)
-    if states:
+                                     'eta_sec': None}, 'samples': [], 'config': None,
+           'tag': tag, 'log_file': None, 'log_note': None}
+    if state_file:
         try:
-            with open(states[-1], encoding='utf-8') as fh:
+            with open(state_file, encoding='utf-8') as fh:
                 out['detail'] = json.load(fh)
-            out['state_file'] = os.path.basename(states[-1])
+            out['state_file'] = os.path.basename(state_file)
             out['state'] = out['detail'].get('status', 'unknown')
             out['config'] = out['detail'].get('config')
         except (OSError, ValueError) as e:
             out['detail'] = 'unreadable: %s' % e
-    if logs:
+    # A state file may also declare itself stale (a run stopped by hand); surface
+    # that so the header can say "stopped" instead of repeating the claim.
+    out['stale'] = bool(isinstance(out['detail'], dict)
+                        and out['detail'].get('stale'))
+    # Ask the process that wrote the file whether it is still there before
+    # repeating its claim. The probe shells out to tasklist, so it is cached like
+    # every other subprocess here rather than run on each 5 s poll.
+    if isinstance(out['detail'], dict) and out['state'] in _LIVE_STATES:
+        pid = out['detail'].get('pid')
+        alive = (None if not pid else
+                 _cached('trainer-pid-%s' % pid, 15,
+                         lambda: _trainer_alive(pid)))
+        if alive is False:
+            detail = dict(out['detail'])
+            detail['status'] = 'stopped — the trainer process is gone'
+            detail['stale'] = True
+            out['detail'] = detail
+            out['state'] = 'stopped'
+            out['stale'] = True
+    log_path = runs.get('log')
+    if log_path:
         try:
-            with open(logs[-1], encoding='utf-8', errors='replace') as fh:
+            with open(log_path, encoding='utf-8', errors='replace') as fh:
                 lines = fh.readlines()
             out['log_tail'] = [ln.rstrip() for ln in lines[-30:]]
-            out['log_file'] = os.path.basename(logs[-1])
+            out['log_file'] = os.path.basename(log_path)
         except OSError as e:
             out['log_tail'] = ['unreadable: %s' % e]
+    else:
+        # Say so rather than borrowing another run's log (the panel used to show
+        # whichever tag trained last, next to these numbers).
+        out['log_note'] = ('no log recorded for tag %s' % tag if tag
+                           else 'no training run recorded yet')
 
     # Structured per-step telemetry from train-<tag>.metrics.jsonl (Phase 7 metrics hook).
-    metrics_files = sorted(glob.glob(os.path.join(ROOT, 'logs', 'train-*.metrics.jsonl')),
-                           key=os.path.getmtime)
-    if metrics_files:
-        mpath = metrics_files[-1]
+    mpath = runs.get('metrics')
+    if mpath:
         out['metrics_file'] = os.path.basename(mpath)
         rows = _read_jsonl(mpath)
         steps, losses, gnorms, lrs, ts, totals = [], [], [], [], [], []
@@ -384,15 +481,15 @@ def training_status():
         out['losses'] = losses[-LOGS_TO_KEEP:]
         out['epochs'] = [r.get('epoch') for r in rows if r.get('step') is not None][-LOGS_TO_KEEP:]
 
-    # Live generations from train-<tag>.samples.json (sample_student.py).
-    sample_files = sorted(glob.glob(os.path.join(ROOT, 'logs', 'train-*.samples.json')),
-                          key=os.path.getmtime)
-    if sample_files:
+    # Live generations from train-<tag>.samples.json (sample_student.py) — the
+    # same tag the state above came from, so the panel cannot show another run's.
+    sfile = runs.get('samples')
+    if sfile:
         try:
-            with open(sample_files[-1], encoding='utf-8') as fh:
+            with open(sfile, encoding='utf-8') as fh:
                 data = json.load(fh)
             out['samples'] = data.get('samples', [])
-            out['samples_file'] = os.path.basename(sample_files[-1])
+            out['samples_file'] = os.path.basename(sfile)
         except (OSError, ValueError):
             pass
     return out
@@ -430,22 +527,21 @@ def export_state():
     return out
 
 
-def corpus_state():
+def corpus_state(state_file=None):
     """What the model actually learns: label masking + corpus health.
 
     Every number comes from a file a pipeline stage wrote (the trainer's state,
     verify_dataset's report, fit_corpus's provenance), so the panel shows
     measurements rather than intentions — and `warnings` names the failure modes
     (unmasked loss, answers truncated away, anchor leakage) instead of hiding
-    them behind a green tick.
+    them behind a green tick. `state_file` is the run the rest of the page is
+    showing; without it the newest one wins.
     """
     out = {'train': None, 'verify': None, 'fit': None, 'warnings': [], 'notes': []}
-    states = [s for s in sorted(glob.glob(os.path.join(ROOT, 'logs', 'train-*.json')),
-                                key=os.path.getmtime)
-              if not s.endswith('train-active.json')]
-    if states:
+    state_file = state_file or _newest(['train-*.json'])
+    if state_file:
         try:
-            with open(states[-1], encoding='utf-8') as fh:
+            with open(state_file, encoding='utf-8') as fh:
                 st = json.load(fh)
             cfg = st.get('config') or {}
             # The state file is merged across runs, so train_loss can be the
@@ -454,7 +550,7 @@ def corpus_state():
             # Only report a final loss once the run that wrote the file is done.
             done = st.get('status') in ('done', 'saving')
             out['train'] = {
-                'file': os.path.basename(states[-1]), 'tag': st.get('tag'),
+                'file': os.path.basename(state_file), 'tag': st.get('tag'),
                 'status': st.get('status'),
                 'loss': st.get('train_loss') if done else None,
                 'dataset': cfg.get('dataset'), 'max_len': cfg.get('max_len'),
@@ -583,16 +679,18 @@ def hf_state():
 
 
 def snapshot():
+    state_file, tag, runs = _run_files()
     return {'updated_utc': datetime.now(timezone.utc).isoformat(timespec='seconds'),
             'phases': [{'n': n, 'name': name, 'status': s, 'doc': d} for n, name, s, d in PHASES],
             'gpus': gpu_state(),
             'host': _cached('host', 10, host_state),
             'teacher': _cached('teacher', 5, teacher_state),
             'endpoints': _cached('endpoints', 6, endpoints_state),
-            'loop': loop_state(),
+            'loop': loop_state(runs.get('loop') or _newest(['loop-*.json'])),
+            'run_tag': tag,
             'datasets': _cached('inventory', 15, dataset_inventory),
-            'training': training_status(),
-            'corpus': corpus_state(),
+            'training': training_status(state_file, tag, runs),
+            'corpus': corpus_state(state_file),
             'hfd': _cached('hfd', 8, hf_state),
             'export': export_state(),
             'control': control_state()}
