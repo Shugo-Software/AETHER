@@ -492,6 +492,18 @@ def push_hub(out_dir, repo, public, state, gguf_repo=None):
             "`venvs/ml/Scripts/hf.exe auth login` once (checked the default "
             "user cache, so HF_HOME does not matter)")
     api = HfApi(token=token)
+    # Say where this is going *before* the first byte moves. The default repo id is
+    # "<token-user>/<name>", which is the wrong home when the release belongs to an
+    # org: this box's token authenticates as SamurAI-Official while the AETHER
+    # releases live under the ShugoSoftware org, so --repo/--gguf-repo must be
+    # explicit (a silent upload to the wrong account is not recoverable).
+    try:
+        who = api.whoami().get("name")
+    except Exception:  # noqa: BLE001 — never block a push on an identity probe
+        who = "?"
+    print("[export] pushing to %s (authenticated as %s)%s"
+          % (repo, who, "" if who in repo.split("/")[0] else
+             "  <-- NOT the token's account: check --repo"), flush=True)
     api.create_repo(repo_id=repo, repo_type="model",
                     private=not public, exist_ok=True)
     api.upload_folder(folder_path=out_dir, repo_id=repo,
