@@ -104,18 +104,43 @@ own renderer (`train_student.format_record` / `format_head`) so they cannot drif
 from training:
 
 - `scripts/verify_dataset.py --jsonl … --max-len 1536 [--overlap …]` — read-only.
-  Reports composition, token lengths, and a per-row truncation class:
-  **complete** / **partial** (answer partly cut) / **answer_cut** (answer gone),
-  measured with the same tokenizer call the trainer truncates with
-  (`fit_corpus.py` uses it too — one accounting, no drift).
-  **Any `answer_cut` row means the corpus is not trainable as it stands**: masked it
-  has no valid loss, unmasked all of its gradient is the prompt. Fix it with
-  `fit_corpus.py` before training; the trainer enforces the same rule itself (both
-  loss modes) and names the row indices, so this can no longer be skipped by
-  accident.
-  whether `<|im_end|>` survives, the share of loss-relevant tokens that are
-  answers, duplicate prompts, and prompt overlap with another file (leakage).
-  Exits non-zero if any row loses its answer.
+  Reports composition, token lengths, and a per-row truncation class —
+  **complete** / **partial** (answer partly cut) / **answer_cut** (answer gone) —
+  whether `<|im_end|>` survives, the share of loss-relevant tokens that are answers,
+  duplicate prompts, and prompt overlap with another file (leakage). Exits non-zero if
+  any row loses its answer. Measured with the same tokenizer call the trainer
+  truncates with (`fit_corpus.py` uses it too — one accounting, no drift), and it
+  reports separately how many rows the fitter had already rewritten (`rewrites`, with
+  the cut point and boundary of the first few) — those are rows that would otherwise
+  have been dropped, so they are reported beside the classes, not inside them.
+- **Prompt trimming — the row is kept, not dropped** (2026-10-16). `fit_corpus.py
+  --prompt-trim tail` (the default) keeps the *end* of an over-long prompt, cuts it at
+  a natural boundary (paragraph → line → sentence → clause → word) and inserts a
+  marker where the cut happened: `[... 3,412 earlier characters omitted ...]`. The
+  answer stays intact whenever that is possible; when it is not, the answer is
+  trimmed to a boundary as well — never marked, because a marker inside a completion
+  is something the model would learn to emit — and the cut is recorded instead.
+  `head` keeps the start of the prompt (question-first corpora), `none` restores the
+  old behaviour of dropping the row.
+
+  Every rewritten row carries its own attribution in `meta.fit`:
+
+  ```json
+  {"policy": "prompt-tail@word", "max_len": 1536,
+   "prompt": {"trimmed": true, "chars_before": 9812, "kept_chars": 4210,
+              "dropped_chars": 5602, "cut_at_char": 5602, "boundary": "word",
+              "marker": "[... 5602 earlier characters omitted ...]"},
+   "answer": {"trimmed": true, "cut_at_char": 1180, "boundary": "line",
+              "answer_tokens": 96, "marker": null}}
+  ```
+
+  and the corpus's `.filter.json` lists `prompt_trimmed_rows`, `answer_trimmed_rows`
+  and `rewritten_rows` (row id + cut point + boundary, one entry per rewrite), so
+  "this output changed" can always be traced to *which* truncation caused it.
+  Measured on this rig: `phase6_pro1` 330 → 397 rows (67 prompt-trimmed),
+  `starcoderdata-code` 2384 → 2386 (3 prompt-trimmed), and corpora with no over-long
+  prompts come out byte-identical — the policy cannot touch a row that already fits.
+
 - `scripts/fit_corpus.py --in … --out … --max-len 1536 --holdout …` — rewrites a
   corpus so every row is learnable: drops anchor-overlapping prompts, trims
   answers back to the last natural boundary (paragraph → line → sentence → word)

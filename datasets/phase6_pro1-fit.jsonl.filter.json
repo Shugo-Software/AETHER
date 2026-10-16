@@ -7,24 +7,2434 @@
  },
  "output": {
   "path": "datasets\\phase6_pro1-fit.jsonl",
-  "rows": 330
+  "rows": 397
  },
  "policy": {
   "max_len": 1536,
   "max_per_prompt": 4,
   "min_answer_tokens": 24,
+  "prompt_trim": "tail",
+  "trim_marker": "(auto: [... N earlier/later characters omitted ...])",
+  "min_kept_prompt_chars": 200,
   "holdout": "datasets\\phase6_pilot1.jsonl",
   "holdout_prompts": 60
  },
  "dropped": {
-  "prompt_too_long": 67,
+  "prompt_too_long": 0,
+  "prompt_too_long_after_trim": 0,
   "anchor_holdout": 101,
   "answer_too_short_after_trim": 2,
   "duplicate_cap": 0
  },
  "trimmed_rows": 79,
+ "prompt_trimmed_rows": 67,
+ "rewritten_rows": [
+  {
+   "index": 1,
+   "id": "a-000001",
+   "rows": 500,
+   "prompt": {
+    "at": "tail",
+    "chars_before": 7705,
+    "kept_chars": 4442,
+    "dropped_chars": 3305,
+    "cut_at_char": 3305,
+    "boundary": "line",
+    "marker": "[... 3305 earlier characters omitted ...]",
+    "marker_chars": 41,
+    "trimmed": true
+   },
+   "answer": null
+  },
+  {
+   "index": 2,
+   "id": "a-000002",
+   "rows": 500,
+   "prompt": null,
+   "answer": {
+    "trimmed": true,
+    "chars_before": 3696,
+    "chars_after": 3527,
+    "cut_at_char": 3528,
+    "boundary": "word",
+    "answer_tokens": 892,
+    "marker": null,
+    "note": "no marker in the answer \u2014 one there would be trained on"
+   }
+  },
+  {
+   "index": 5,
+   "id": "a-000005",
+   "rows": 500,
+   "prompt": {
+    "at": "tail",
+    "chars_before": 8743,
+    "kept_chars": 3878,
+    "dropped_chars": 4907,
+    "cut_at_char": 4907,
+    "boundary": "word",
+    "marker": "[... 4907 earlier characters omitted ...]",
+    "marker_chars": 41,
+    "trimmed": true
+   },
+   "answer": null
+  },
+  {
+   "index": 11,
+   "id": "a-000011",
+   "rows": 500,
+   "prompt": {
+    "at": "tail",
+    "chars_before": 7057,
+    "kept_chars": 1842,
+    "dropped_chars": 5257,
+    "cut_at_char": 5257,
+    "boundary": "line",
+    "marker": "[... 5257 earlier characters omitted ...]",
+    "marker_chars": 41,
+    "trimmed": true
+   },
+   "answer": null
+  },
+  {
+   "index": 17,
+   "id": "a-000017",
+   "rows": 500,
+   "prompt": {
+    "at": "tail",
+    "chars_before": 6799,
+    "kept_chars": 1370,
+    "dropped_chars": 5471,
+    "cut_at_char": 5471,
+    "boundary": "clause",
+    "marker": "[... 5471 earlier characters omitted ...]",
+    "marker_chars": 41,
+    "trimmed": true
+   },
+   "answer": null
+  },
+  {
+   "index": 18,
+   "id": "a-000018",
+   "rows": 500,
+   "prompt": {
+    "at": "tail",
+    "chars_before": 5664,
+    "kept_chars": 3573,
+    "dropped_chars": 2133,
+    "cut_at_char": 2133,
+    "boundary": "word",
+    "marker": "[... 2133 earlier characters omitted ...]",
+    "marker_chars": 41,
+    "trimmed": true
+   },
+   "answer": null
+  },
+  {
+   "index": 23,
+   "id": "a-000023",
+   "rows": 500,
+   "prompt": null,
+   "answer": {
+    "trimmed": true,
+    "chars_before": 4254,
+    "chars_after": 2455,
+    "cut_at_char": 2456,
+    "boundary": "word",
+    "answer_tokens": 596,
+    "marker": null,
+    "note": "no marker in the answer \u2014 one there would be trained on"
+   }
+  },
+  {
+   "index": 24,
+   "id": "a-000024",
+   "rows": 500,
+   "prompt": {
+    "at": "tail",
+    "chars_before": 6587,
+    "kept_chars": 4688,
+    "dropped_chars": 1941,
+    "cut_at_char": 1941,
+    "boundary": "word",
+    "marker": "[... 1941 earlier characters omitted ...]",
+    "marker_chars": 41,
+    "trimmed": true
+   },
+   "answer": null
+  },
+  {
+   "index": 29,
+   "id": "a-000029",
+   "rows": 500,
+   "prompt": null,
+   "answer": {
+    "trimmed": true,
+    "chars_before": 4424,
+    "chars_after": 593,
+    "cut_at_char": 594,
+    "boundary": "clause",
+    "answer_tokens": 143,
+    "marker": null,
+    "note": "no marker in the answer \u2014 one there would be trained on"
+   }
+  },
+  {
+   "index": 31,
+   "id": "a-000031",
+   "rows": 500,
+   "prompt": {
+    "at": "tail",
+    "chars_before": 7033,
+    "kept_chars": 4565,
+    "dropped_chars": 2510,
+    "cut_at_char": 2510,
+    "boundary": "clause",
+    "marker": "[... 2510 earlier characters omitted ...]",
+    "marker_chars": 41,
+    "trimmed": true
+   },
+   "answer": null
+  },
+  {
+   "index": 32,
+   "id": "a-000032",
+   "rows": 500,
+   "prompt": null,
+   "answer": {
+    "trimmed": true,
+    "chars_before": 4277,
+    "chars_after": 1105,
+    "cut_at_char": 1106,
+    "boundary": "word",
+    "answer_tokens": 292,
+    "marker": null,
+    "note": "no marker in the answer \u2014 one there would be trained on"
+   }
+  },
+  {
+   "index": 40,
+   "id": "a-000040",
+   "rows": 500,
+   "prompt": null,
+   "answer": {
+    "trimmed": true,
+    "chars_before": 1669,
+    "chars_after": 406,
+    "cut_at_char": 407,
+    "boundary": "word",
+    "answer_tokens": 122,
+    "marker": null,
+    "note": "no marker in the answer \u2014 one there would be trained on"
+   }
+  },
+  {
+   "index": 41,
+   "id": "a-000041",
+   "rows": 500,
+   "prompt": {
+    "at": "tail",
+    "chars_before": 7073,
+    "kept_chars": 2257,
+    "dropped_chars": 4858,
+    "cut_at_char": 4858,
+    "boundary": "line",
+    "marker": "[... 4858 earlier characters omitted ...]",
+    "marker_chars": 41,
+    "trimmed": true
+   },
+   "answer": null
+  },
+  {
+   "index": 45,
+   "id": "a-000045",
+   "rows": 500,
+   "prompt": {
+    "at": "tail",
+    "chars_before": 6247,
+    "kept_chars": 4808,
+    "dropped_chars": 1480,
+    "cut_at_char": 1480,
+    "boundary": "line",
+    "marker": "[... 1480 earlier characters omitted ...]",
+    "marker_chars": 41,
+    "trimmed": true
+   },
+   "answer": null
+  },
+  {
+   "index": 47,
+   "id": "a-000047",
+   "rows": 500,
+   "prompt": {
+    "at": "tail",
+    "chars_before": 5869,
+    "kept_chars": 3082,
+    "dropped_chars": 2829,
+    "cut_at_char": 2829,
+    "boundary": "word",
+    "marker": "[... 2829 earlier characters omitted ...]",
+    "marker_chars": 41,
+    "trimmed": true
+   },
+   "answer": null
+  },
+  {
+   "index": 49,
+   "id": "a-000049",
+   "rows": 500,
+   "prompt": null,
+   "answer": {
+    "trimmed": true,
+    "chars_before": 1670,
+    "chars_after": 1132,
+    "cut_at_char": 1133,
+    "boundary": "line",
+    "answer_tokens": 240,
+    "marker": null,
+    "note": "no marker in the answer \u2014 one there would be trained on"
+   }
+  },
+  {
+   "index": 50,
+   "id": "a-000050",
+   "rows": 500,
+   "prompt": null,
+   "answer": {
+    "trimmed": true,
+    "chars_before": 4220,
+    "chars_after": 2206,
+    "cut_at_char": 2207,
+    "boundary": "word",
+    "answer_tokens": 540,
+    "marker": null,
+    "note": "no marker in the answer \u2014 one there would be trained on"
+   }
+  },
+  {
+   "index": 52,
+   "id": "a-000052",
+   "rows": 500,
+   "prompt": {
+    "at": "tail",
+    "chars_before": 6400,
+    "kept_chars": 3390,
+    "dropped_chars": 3052,
+    "cut_at_char": 3052,
+    "boundary": "word",
+    "marker": "[... 3052 earlier characters omitted ...]",
+    "marker_chars": 41,
+    "trimmed": true
+   },
+   "answer": null
+  },
+  {
+   "index": 59,
+   "id": "a-000059",
+   "rows": 500,
+   "prompt": null,
+   "answer": {
+    "trimmed": true,
+    "chars_before": 2698,
+    "chars_after": 1855,
+    "cut_at_char": 1856,
+    "boundary": "word",
+    "answer_tokens": 454,
+    "marker": null,
+    "note": "no marker in the answer \u2014 one there would be trained on"
+   }
+  },
+  {
+   "index": 67,
+   "id": "a-000067",
+   "rows": 500,
+   "prompt": {
+    "at": "tail",
+    "chars_before": 6304,
+    "kept_chars": 3644,
+    "dropped_chars": 2702,
+    "cut_at_char": 2702,
+    "boundary": "word",
+    "marker": "[... 2702 earlier characters omitted ...]",
+    "marker_chars": 41,
+    "trimmed": true
+   },
+   "answer": null
+  },
+  {
+   "index": 68,
+   "id": "a-000068",
+   "rows": 500,
+   "prompt": null,
+   "answer": {
+    "trimmed": true,
+    "chars_before": 4792,
+    "chars_after": 4452,
+    "cut_at_char": 4453,
+    "boundary": "word",
+    "answer_tokens": 1015,
+    "marker": null,
+    "note": "no marker in the answer \u2014 one there would be trained on"
+   }
+  },
+  {
+   "index": 71,
+   "id": "a-000071",
+   "rows": 500,
+   "prompt": null,
+   "answer": {
+    "trimmed": true,
+    "chars_before": 3173,
+    "chars_after": 1223,
+    "cut_at_char": 1224,
+    "boundary": "word",
+    "answer_tokens": 344,
+    "marker": null,
+    "note": "no marker in the answer \u2014 one there would be trained on"
+   }
+  },
+  {
+   "index": 74,
+   "id": "a-000074",
+   "rows": 500,
+   "prompt": {
+    "at": "tail",
+    "chars_before": 5678,
+    "kept_chars": 1088,
+    "dropped_chars": 4632,
+    "cut_at_char": 4632,
+    "boundary": "line",
+    "marker": "[... 4632 earlier characters omitted ...]",
+    "marker_chars": 41,
+    "trimmed": true
+   },
+   "answer": null
+  },
+  {
+   "index": 77,
+   "id": "a-000077",
+   "rows": 500,
+   "prompt": {
+    "at": "tail",
+    "chars_before": 9091,
+    "kept_chars": 1816,
+    "dropped_chars": 7317,
+    "cut_at_char": 7317,
+    "boundary": "line",
+    "marker": "[... 7317 earlier characters omitted ...]",
+    "marker_chars": 41,
+    "trimmed": true
+   },
+   "answer": null
+  },
+  {
+   "index": 79,
+   "id": "a-000079",
+   "rows": 500,
+   "prompt": {
+    "at": "tail",
+    "chars_before": 8304,
+    "kept_chars": 5370,
+    "dropped_chars": 2976,
+    "cut_at_char": 2976,
+    "boundary": "word",
+    "marker": "[... 2976 earlier characters omitted ...]",
+    "marker_chars": 41,
+    "trimmed": true
+   },
+   "answer": null
+  },
+  {
+   "index": 83,
+   "id": "a-000083",
+   "rows": 500,
+   "prompt": {
+    "at": "tail",
+    "chars_before": 7185,
+    "kept_chars": 1653,
+    "dropped_chars": 5574,
+    "cut_at_char": 5574,
+    "boundary": "line",
+    "marker": "[... 5574 earlier characters omitted ...]",
+    "marker_chars": 41,
+    "trimmed": true
+   },
+   "answer": null
+  },
+  {
+   "index": 85,
+   "id": "a-000085",
+   "rows": 500,
+   "prompt": {
+    "at": "tail",
+    "chars_before": 7963,
+    "kept_chars": 3660,
+    "dropped_chars": 4345,
+    "cut_at_char": 4345,
+    "boundary": "clause",
+    "marker": "[... 4345 earlier characters omitted ...]",
+    "marker_chars": 41,
+    "trimmed": true
+   },
+   "answer": null
+  },
+  {
+   "index": 86,
+   "id": "a-000086",
+   "rows": 500,
+   "prompt": null,
+   "answer": {
+    "trimmed": true,
+    "chars_before": 4410,
+    "chars_after": 3030,
+    "cut_at_char": 3031,
+    "boundary": "word",
+    "answer_tokens": 699,
+    "marker": null,
+    "note": "no marker in the answer \u2014 one there would be trained on"
+   }
+  },
+  {
+   "index": 89,
+   "id": "a-000089",
+   "rows": 500,
+   "prompt": {
+    "at": "tail",
+    "chars_before": 7369,
+    "kept_chars": 1813,
+    "dropped_chars": 5598,
+    "cut_at_char": 5598,
+    "boundary": "line",
+    "marker": "[... 5598 earlier characters omitted ...]",
+    "marker_chars": 41,
+    "trimmed": true
+   },
+   "answer": null
+  },
+  {
+   "index": 90,
+   "id": "a-000090",
+   "rows": 500,
+   "prompt": null,
+   "answer": {
+    "trimmed": true,
+    "chars_before": 1273,
+    "chars_after": 786,
+    "cut_at_char": 787,
+    "boundary": "word",
+    "answer_tokens": 185,
+    "marker": null,
+    "note": "no marker in the answer \u2014 one there would be trained on"
+   }
+  },
+  {
+   "index": 95,
+   "id": "a-000095",
+   "rows": 500,
+   "prompt": null,
+   "answer": {
+    "trimmed": true,
+    "chars_before": 3918,
+    "chars_after": 3789,
+    "cut_at_char": 3790,
+    "boundary": "word",
+    "answer_tokens": 988,
+    "marker": null,
+    "note": "no marker in the answer \u2014 one there would be trained on"
+   }
+  },
+  {
+   "index": 96,
+   "id": "a-000096",
+   "rows": 500,
+   "prompt": null,
+   "answer": {
+    "trimmed": true,
+    "chars_before": 1051,
+    "chars_after": 129,
+    "cut_at_char": 130,
+    "boundary": "word",
+    "answer_tokens": 27,
+    "marker": null,
+    "note": "no marker in the answer \u2014 one there would be trained on"
+   }
+  },
+  {
+   "index": 100,
+   "id": "a-000100",
+   "rows": 500,
+   "prompt": {
+    "at": "tail",
+    "chars_before": 5829,
+    "kept_chars": 4178,
+    "dropped_chars": 1693,
+    "cut_at_char": 1693,
+    "boundary": "line",
+    "marker": "[... 1693 earlier characters omitted ...]",
+    "marker_chars": 41,
+    "trimmed": true
+   },
+   "answer": null
+  },
+  {
+   "index": 103,
+   "id": "a-000103",
+   "rows": 500,
+   "prompt": {
+    "at": "tail",
+    "chars_before": 7319,
+    "kept_chars": 4052,
+    "dropped_chars": 3309,
+    "cut_at_char": 3309,
+    "boundary": "word",
+    "marker": "[... 3309 earlier characters omitted ...]",
+    "marker_chars": 41,
+    "trimmed": true
+   },
+   "answer": null
+  },
+  {
+   "index": 104,
+   "id": "a-000104",
+   "rows": 500,
+   "prompt": null,
+   "answer": {
+    "trimmed": true,
+    "chars_before": 5009,
+    "chars_after": 2810,
+    "cut_at_char": 2811,
+    "boundary": "line",
+    "answer_tokens": 606,
+    "marker": null,
+    "note": "no marker in the answer \u2014 one there would be trained on"
+   }
+  },
+  {
+   "index": 107,
+   "id": "a-000107",
+   "rows": 500,
+   "prompt": null,
+   "answer": {
+    "trimmed": true,
+    "chars_before": 3929,
+    "chars_after": 3708,
+    "cut_at_char": 3709,
+    "boundary": "word",
+    "answer_tokens": 933,
+    "marker": null,
+    "note": "no marker in the answer \u2014 one there would be trained on"
+   }
+  },
+  {
+   "index": 110,
+   "id": "a-000110",
+   "rows": 500,
+   "prompt": {
+    "at": "tail",
+    "chars_before": 5236,
+    "kept_chars": 1277,
+    "dropped_chars": 4001,
+    "cut_at_char": 4001,
+    "boundary": "word",
+    "marker": "[... 4001 earlier characters omitted ...]",
+    "marker_chars": 41,
+    "trimmed": true
+   },
+   "answer": null
+  },
+  {
+   "index": 113,
+   "id": "a-000113",
+   "rows": 500,
+   "prompt": null,
+   "answer": {
+    "trimmed": true,
+    "chars_before": 4157,
+    "chars_after": 3770,
+    "cut_at_char": 3771,
+    "boundary": "word",
+    "answer_tokens": 992,
+    "marker": null,
+    "note": "no marker in the answer \u2014 one there would be trained on"
+   }
+  },
+  {
+   "index": 114,
+   "id": "a-000114",
+   "rows": 500,
+   "prompt": {
+    "at": "tail",
+    "chars_before": 5299,
+    "kept_chars": 4188,
+    "dropped_chars": 1153,
+    "cut_at_char": 1153,
+    "boundary": "word",
+    "marker": "[... 1153 earlier characters omitted ...]",
+    "marker_chars": 41,
+    "trimmed": true
+   },
+   "answer": null
+  },
+  {
+   "index": 115,
+   "id": "a-000115",
+   "rows": 500,
+   "prompt": null,
+   "answer": {
+    "trimmed": true,
+    "chars_before": 1654,
+    "chars_after": 1537,
+    "cut_at_char": 1538,
+    "boundary": "word",
+    "answer_tokens": 360,
+    "marker": null,
+    "note": "no marker in the answer \u2014 one there would be trained on"
+   }
+  },
+  {
+   "index": 116,
+   "id": "a-000116",
+   "rows": 500,
+   "prompt": null,
+   "answer": {
+    "trimmed": true,
+    "chars_before": 3442,
+    "chars_after": 819,
+    "cut_at_char": 820,
+    "boundary": "word",
+    "answer_tokens": 226,
+    "marker": null,
+    "note": "no marker in the answer \u2014 one there would be trained on"
+   }
+  },
+  {
+   "index": 120,
+   "id": "a-000120",
+   "rows": 500,
+   "prompt": null,
+   "answer": {
+    "trimmed": true,
+    "chars_before": 1448,
+    "chars_after": 654,
+    "cut_at_char": 655,
+    "boundary": "word",
+    "answer_tokens": 164,
+    "marker": null,
+    "note": "no marker in the answer \u2014 one there would be trained on"
+   }
+  },
+  {
+   "index": 125,
+   "id": "a-000125",
+   "rows": 500,
+   "prompt": {
+    "at": "tail",
+    "chars_before": 5804,
+    "kept_chars": 1191,
+    "dropped_chars": 4655,
+    "cut_at_char": 4655,
+    "boundary": "clause",
+    "marker": "[... 4655 earlier characters omitted ...]",
+    "marker_chars": 41,
+    "trimmed": true
+   },
+   "answer": null
+  },
+  {
+   "index": 128,
+   "id": "a-000128",
+   "rows": 500,
+   "prompt": null,
+   "answer": {
+    "trimmed": true,
+    "chars_before": 4119,
+    "chars_after": 3988,
+    "cut_at_char": 3989,
+    "boundary": "word",
+    "answer_tokens": 1000,
+    "marker": null,
+    "note": "no marker in the answer \u2014 one there would be trained on"
+   }
+  },
+  {
+   "index": 130,
+   "id": "a-000130",
+   "rows": 500,
+   "prompt": null,
+   "answer": {
+    "trimmed": true,
+    "chars_before": 1171,
+    "chars_after": 296,
+    "cut_at_char": 297,
+    "boundary": "word",
+    "answer_tokens": 74,
+    "marker": null,
+    "note": "no marker in the answer \u2014 one there would be trained on"
+   }
+  },
+  {
+   "index": 131,
+   "id": "a-000131",
+   "rows": 500,
+   "prompt": null,
+   "answer": {
+    "trimmed": true,
+    "chars_before": 3464,
+    "chars_after": 1954,
+    "cut_at_char": 1956,
+    "boundary": "word",
+    "answer_tokens": 539,
+    "marker": null,
+    "note": "no marker in the answer \u2014 one there would be trained on"
+   }
+  },
+  {
+   "index": 132,
+   "id": "a-000132",
+   "rows": 500,
+   "prompt": {
+    "at": "tail",
+    "chars_before": 6445,
+    "kept_chars": 5182,
+    "dropped_chars": 1305,
+    "cut_at_char": 1305,
+    "boundary": "line",
+    "marker": "[... 1305 earlier characters omitted ...]",
+    "marker_chars": 41,
+    "trimmed": true
+   },
+   "answer": null
+  },
+  {
+   "index": 137,
+   "id": "a-000137",
+   "rows": 500,
+   "prompt": {
+    "at": "tail",
+    "chars_before": 7400,
+    "kept_chars": 2432,
+    "dropped_chars": 5010,
+    "cut_at_char": 5010,
+    "boundary": "line",
+    "marker": "[... 5010 earlier characters omitted ...]",
+    "marker_chars": 41,
+    "trimmed": true
+   },
+   "answer": null
+  },
+  {
+   "index": 139,
+   "id": "a-000139",
+   "rows": 500,
+   "prompt": {
+    "at": "tail",
+    "chars_before": 7477,
+    "kept_chars": 4193,
+    "dropped_chars": 3326,
+    "cut_at_char": 3326,
+    "boundary": "word",
+    "marker": "[... 3326 earlier characters omitted ...]",
+    "marker_chars": 41,
+    "trimmed": true
+   },
+   "answer": null
+  },
+  {
+   "index": 140,
+   "id": "a-000140",
+   "rows": 500,
+   "prompt": {
+    "at": "tail",
+    "chars_before": 6489,
+    "kept_chars": 1912,
+    "dropped_chars": 4619,
+    "cut_at_char": 4619,
+    "boundary": "word",
+    "marker": "[... 4619 earlier characters omitted ...]",
+    "marker_chars": 41,
+    "trimmed": true
+   },
+   "answer": null
+  },
+  {
+   "index": 143,
+   "id": "a-000143",
+   "rows": 500,
+   "prompt": null,
+   "answer": {
+    "trimmed": true,
+    "chars_before": 4012,
+    "chars_after": 2000,
+    "cut_at_char": 2017,
+    "boundary": "word",
+    "answer_tokens": 520,
+    "marker": null,
+    "note": "no marker in the answer \u2014 one there would be trained on"
+   }
+  },
+  {
+   "index": 145,
+   "id": "a-000145",
+   "rows": 500,
+   "prompt": null,
+   "answer": {
+    "trimmed": true,
+    "chars_before": 2100,
+    "chars_after": 917,
+    "cut_at_char": 918,
+    "boundary": "word",
+    "answer_tokens": 218,
+    "marker": null,
+    "note": "no marker in the answer \u2014 one there would be trained on"
+   }
+  },
+  {
+   "index": 146,
+   "id": "a-000146",
+   "rows": 500,
+   "prompt": null,
+   "answer": {
+    "trimmed": true,
+    "chars_before": 3982,
+    "chars_after": 3542,
+    "cut_at_char": 3543,
+    "boundary": "sentence",
+    "answer_tokens": 874,
+    "marker": null,
+    "note": "no marker in the answer \u2014 one there would be trained on"
+   }
+  },
+  {
+   "index": 149,
+   "id": "a-000149",
+   "rows": 500,
+   "prompt": null,
+   "answer": {
+    "trimmed": true,
+    "chars_before": 3502,
+    "chars_after": 2733,
+    "cut_at_char": 2735,
+    "boundary": "paragraph",
+    "answer_tokens": 797,
+    "marker": null,
+    "note": "no marker in the answer \u2014 one there would be trained on"
+   }
+  },
+  {
+   "index": 152,
+   "id": "a-000152",
+   "rows": 500,
+   "prompt": null,
+   "answer": {
+    "trimmed": true,
+    "chars_before": 4011,
+    "chars_after": 1427,
+    "cut_at_char": 1428,
+    "boundary": "word",
+    "answer_tokens": 357,
+    "marker": null,
+    "note": "no marker in the answer \u2014 one there would be trained on"
+   }
+  },
+  {
+   "index": 158,
+   "id": "a-000158",
+   "rows": 500,
+   "prompt": {
+    "at": "tail",
+    "chars_before": 6277,
+    "kept_chars": 1320,
+    "dropped_chars": 4999,
+    "cut_at_char": 4999,
+    "boundary": "line",
+    "marker": "[... 4999 earlier characters omitted ...]",
+    "marker_chars": 41,
+    "trimmed": true
+   },
+   "answer": null
+  },
+  {
+   "index": 160,
+   "id": "a-000160",
+   "rows": 500,
+   "prompt": null,
+   "answer": {
+    "trimmed": true,
+    "chars_before": 1399,
+    "chars_after": 550,
+    "cut_at_char": 551,
+    "boundary": "word",
+    "answer_tokens": 139,
+    "marker": null,
+    "note": "no marker in the answer \u2014 one there would be trained on"
+   }
+  },
+  {
+   "index": 161,
+   "id": "a-000161",
+   "rows": 500,
+   "prompt": null,
+   "answer": {
+    "trimmed": true,
+    "chars_before": 3918,
+    "chars_after": 3443,
+    "cut_at_char": 3444,
+    "boundary": "word",
+    "answer_tokens": 909,
+    "marker": null,
+    "note": "no marker in the answer \u2014 one there would be trained on"
+   }
+  },
+  {
+   "index": 167,
+   "id": "a-000167",
+   "rows": 500,
+   "prompt": null,
+   "answer": {
+    "trimmed": true,
+    "chars_before": 4495,
+    "chars_after": 3267,
+    "cut_at_char": 3268,
+    "boundary": "word",
+    "answer_tokens": 803,
+    "marker": null,
+    "note": "no marker in the answer \u2014 one there would be trained on"
+   }
+  },
+  {
+   "index": 168,
+   "id": "a-000168",
+   "rows": 500,
+   "prompt": null,
+   "answer": {
+    "trimmed": true,
+    "chars_before": 1439,
+    "chars_after": 955,
+    "cut_at_char": 956,
+    "boundary": "word",
+    "answer_tokens": 203,
+    "marker": null,
+    "note": "no marker in the answer \u2014 one there would be trained on"
+   }
+  },
+  {
+   "index": 173,
+   "id": "a-000173",
+   "rows": 500,
+   "prompt": {
+    "at": "tail",
+    "chars_before": 5949,
+    "kept_chars": 1329,
+    "dropped_chars": 4662,
+    "cut_at_char": 4662,
+    "boundary": "word",
+    "marker": "[... 4662 earlier characters omitted ...]",
+    "marker_chars": 41,
+    "trimmed": true
+   },
+   "answer": null
+  },
+  {
+   "index": 176,
+   "id": "a-000176",
+   "rows": 500,
+   "prompt": null,
+   "answer": {
+    "trimmed": true,
+    "chars_before": 4003,
+    "chars_after": 3080,
+    "cut_at_char": 3089,
+    "boundary": "word",
+    "answer_tokens": 848,
+    "marker": null,
+    "note": "no marker in the answer \u2014 one there would be trained on"
+   }
+  },
+  {
+   "index": 178,
+   "id": "a-000178",
+   "rows": 500,
+   "prompt": {
+    "at": "tail",
+    "chars_before": 5128,
+    "kept_chars": 3728,
+    "dropped_chars": 1442,
+    "cut_at_char": 1442,
+    "boundary": "word",
+    "marker": "[... 1442 earlier characters omitted ...]",
+    "marker_chars": 41,
+    "trimmed": true
+   },
+   "answer": null
+  },
+  {
+   "index": 179,
+   "id": "a-000179",
+   "rows": 500,
+   "prompt": null,
+   "answer": {
+    "trimmed": true,
+    "chars_before": 4758,
+    "chars_after": 4227,
+    "cut_at_char": 4228,
+    "boundary": "line",
+    "answer_tokens": 924,
+    "marker": null,
+    "note": "no marker in the answer \u2014 one there would be trained on"
+   }
+  },
+  {
+   "index": 180,
+   "id": "a-000180",
+   "rows": 500,
+   "prompt": null,
+   "answer": {
+    "trimmed": true,
+    "chars_before": 1160,
+    "chars_after": 1011,
+    "cut_at_char": 1012,
+    "boundary": "word",
+    "answer_tokens": 237,
+    "marker": null,
+    "note": "no marker in the answer \u2014 one there would be trained on"
+   }
+  },
+  {
+   "index": 181,
+   "id": "a-000181",
+   "rows": 500,
+   "prompt": {
+    "at": "tail",
+    "chars_before": 8237,
+    "kept_chars": 5399,
+    "dropped_chars": 2880,
+    "cut_at_char": 2880,
+    "boundary": "line",
+    "marker": "[... 2880 earlier characters omitted ...]",
+    "marker_chars": 41,
+    "trimmed": true
+   },
+   "answer": null
+  },
+  {
+   "index": 188,
+   "id": "a-000188",
+   "rows": 500,
+   "prompt": null,
+   "answer": {
+    "trimmed": true,
+    "chars_before": 3818,
+    "chars_after": 3068,
+    "cut_at_char": 3069,
+    "boundary": "word",
+    "answer_tokens": 842,
+    "marker": null,
+    "note": "no marker in the answer \u2014 one there would be trained on"
+   }
+  },
+  {
+   "index": 189,
+   "id": "a-000189",
+   "rows": 500,
+   "prompt": {
+    "at": "tail",
+    "chars_before": 8608,
+    "kept_chars": 5585,
+    "dropped_chars": 3065,
+    "cut_at_char": 3065,
+    "boundary": "sentence",
+    "marker": "[... 3065 earlier characters omitted ...]",
+    "marker_chars": 41,
+    "trimmed": true
+   },
+   "answer": null
+  },
+  {
+   "index": 190,
+   "id": "a-000190",
+   "rows": 500,
+   "prompt": {
+    "at": "tail",
+    "chars_before": 5506,
+    "kept_chars": 4077,
+    "dropped_chars": 1471,
+    "cut_at_char": 1471,
+    "boundary": "word",
+    "marker": "[... 1471 earlier characters omitted ...]",
+    "marker_chars": 41,
+    "trimmed": true
+   },
+   "answer": null
+  },
+  {
+   "index": 191,
+   "id": "a-000191",
+   "rows": 500,
+   "prompt": null,
+   "answer": {
+    "trimmed": true,
+    "chars_before": 4534,
+    "chars_after": 1653,
+    "cut_at_char": 1654,
+    "boundary": "word",
+    "answer_tokens": 400,
+    "marker": null,
+    "note": "no marker in the answer \u2014 one there would be trained on"
+   }
+  },
+  {
+   "index": 194,
+   "id": "a-000194",
+   "rows": 500,
+   "prompt": null,
+   "answer": {
+    "trimmed": true,
+    "chars_before": 4004,
+    "chars_after": 1912,
+    "cut_at_char": 1913,
+    "boundary": "word",
+    "answer_tokens": 474,
+    "marker": null,
+    "note": "no marker in the answer \u2014 one there would be trained on"
+   }
+  },
+  {
+   "index": 197,
+   "id": "a-000197",
+   "rows": 500,
+   "prompt": null,
+   "answer": {
+    "trimmed": true,
+    "chars_before": 3964,
+    "chars_after": 3311,
+    "cut_at_char": 3320,
+    "boundary": "word",
+    "answer_tokens": 807,
+    "marker": null,
+    "note": "no marker in the answer \u2014 one there would be trained on"
+   }
+  },
+  {
+   "index": 203,
+   "id": "a-000203",
+   "rows": 500,
+   "prompt": {
+    "at": "tail",
+    "chars_before": 6044,
+    "kept_chars": 1408,
+    "dropped_chars": 4678,
+    "cut_at_char": 4678,
+    "boundary": "word",
+    "marker": "[... 4678 earlier characters omitted ...]",
+    "marker_chars": 41,
+    "trimmed": true
+   },
+   "answer": null
+  },
+  {
+   "index": 204,
+   "id": "a-000204",
+   "rows": 500,
+   "prompt": null,
+   "answer": {
+    "trimmed": true,
+    "chars_before": 1525,
+    "chars_after": 481,
+    "cut_at_char": 482,
+    "boundary": "word",
+    "answer_tokens": 107,
+    "marker": null,
+    "note": "no marker in the answer \u2014 one there would be trained on"
+   }
+  },
+  {
+   "index": 210,
+   "id": "a-000210",
+   "rows": 500,
+   "prompt": null,
+   "answer": {
+    "trimmed": true,
+    "chars_before": 1099,
+    "chars_after": 1009,
+    "cut_at_char": 1010,
+    "boundary": "word",
+    "answer_tokens": 238,
+    "marker": null,
+    "note": "no marker in the answer \u2014 one there would be trained on"
+   }
+  },
+  {
+   "index": 211,
+   "id": "a-000211",
+   "rows": 500,
+   "prompt": {
+    "at": "tail",
+    "chars_before": 8292,
+    "kept_chars": 5385,
+    "dropped_chars": 2949,
+    "cut_at_char": 2949,
+    "boundary": "line",
+    "marker": "[... 2949 earlier characters omitted ...]",
+    "marker_chars": 41,
+    "trimmed": true
+   },
+   "answer": null
+  },
+  {
+   "index": 212,
+   "id": "a-000212",
+   "rows": 500,
+   "prompt": null,
+   "answer": {
+    "trimmed": true,
+    "chars_before": 4249,
+    "chars_after": 3491,
+    "cut_at_char": 3500,
+    "boundary": "word",
+    "answer_tokens": 868,
+    "marker": null,
+    "note": "no marker in the answer \u2014 one there would be trained on"
+   }
+  },
+  {
+   "index": 213,
+   "id": "a-000213",
+   "rows": 500,
+   "prompt": null,
+   "answer": {
+    "trimmed": true,
+    "chars_before": 1476,
+    "chars_after": 739,
+    "cut_at_char": 740,
+    "boundary": "word",
+    "answer_tokens": 184,
+    "marker": null,
+    "note": "no marker in the answer \u2014 one there would be trained on"
+   }
+  },
+  {
+   "index": 214,
+   "id": "a-000214",
+   "rows": 500,
+   "prompt": {
+    "at": "tail",
+    "chars_before": 7631,
+    "kept_chars": 3991,
+    "dropped_chars": 3682,
+    "cut_at_char": 3682,
+    "boundary": "clause",
+    "marker": "[... 3682 earlier characters omitted ...]",
+    "marker_chars": 41,
+    "trimmed": true
+   },
+   "answer": null
+  },
+  {
+   "index": 215,
+   "id": "a-000215",
+   "rows": 500,
+   "prompt": null,
+   "answer": {
+    "trimmed": true,
+    "chars_before": 3911,
+    "chars_after": 2967,
+    "cut_at_char": 2968,
+    "boundary": "word",
+    "answer_tokens": 751,
+    "marker": null,
+    "note": "no marker in the answer \u2014 one there would be trained on"
+   }
+  },
+  {
+   "index": 216,
+   "id": "a-000216",
+   "rows": 500,
+   "prompt": {
+    "at": "tail",
+    "chars_before": 7235,
+    "kept_chars": 4642,
+    "dropped_chars": 2635,
+    "cut_at_char": 2635,
+    "boundary": "line",
+    "marker": "[... 2635 earlier characters omitted ...]",
+    "marker_chars": 41,
+    "trimmed": true
+   },
+   "answer": null
+  },
+  {
+   "index": 218,
+   "id": "a-000218",
+   "rows": 500,
+   "prompt": null,
+   "answer": {
+    "trimmed": true,
+    "chars_before": 3083,
+    "chars_after": 2292,
+    "cut_at_char": 2293,
+    "boundary": "word",
+    "answer_tokens": 733,
+    "marker": null,
+    "note": "no marker in the answer \u2014 one there would be trained on"
+   }
+  },
+  {
+   "index": 219,
+   "id": "a-000219",
+   "rows": 500,
+   "prompt": {
+    "at": "tail",
+    "chars_before": 6726,
+    "kept_chars": 4153,
+    "dropped_chars": 2615,
+    "cut_at_char": 2615,
+    "boundary": "clause",
+    "marker": "[... 2615 earlier characters omitted ...]",
+    "marker_chars": 41,
+    "trimmed": true
+   },
+   "answer": null
+  },
+  {
+   "index": 221,
+   "id": "a-000221",
+   "rows": 500,
+   "prompt": {
+    "at": "tail",
+    "chars_before": 8533,
+    "kept_chars": 1609,
+    "dropped_chars": 6966,
+    "cut_at_char": 6966,
+    "boundary": "word",
+    "marker": "[... 6966 earlier characters omitted ...]",
+    "marker_chars": 41,
+    "trimmed": true
+   },
+   "answer": null
+  },
+  {
+   "index": 224,
+   "id": "a-000224",
+   "rows": 500,
+   "prompt": {
+    "at": "tail",
+    "chars_before": 6101,
+    "kept_chars": 1318,
+    "dropped_chars": 4825,
+    "cut_at_char": 4825,
+    "boundary": "clause",
+    "marker": "[... 4825 earlier characters omitted ...]",
+    "marker_chars": 41,
+    "trimmed": true
+   },
+   "answer": null
+  },
+  {
+   "index": 227,
+   "id": "a-000227",
+   "rows": 500,
+   "prompt": {
+    "at": "tail",
+    "chars_before": 6559,
+    "kept_chars": 1612,
+    "dropped_chars": 4989,
+    "cut_at_char": 4989,
+    "boundary": "line",
+    "marker": "[... 4989 earlier characters omitted ...]",
+    "marker_chars": 41,
+    "trimmed": true
+   },
+   "answer": null
+  },
+  {
+   "index": 230,
+   "id": "a-000230",
+   "rows": 500,
+   "prompt": null,
+   "answer": {
+    "trimmed": true,
+    "chars_before": 4279,
+    "chars_after": 926,
+    "cut_at_char": 927,
+    "boundary": "word",
+    "answer_tokens": 228,
+    "marker": null,
+    "note": "no marker in the answer \u2014 one there would be trained on"
+   }
+  },
+  {
+   "index": 235,
+   "id": "a-000235",
+   "rows": 500,
+   "prompt": null,
+   "answer": {
+    "trimmed": true,
+    "chars_before": 1409,
+    "chars_after": 720,
+    "cut_at_char": 721,
+    "boundary": "word",
+    "answer_tokens": 217,
+    "marker": null,
+    "note": "no marker in the answer \u2014 one there would be trained on"
+   }
+  },
+  {
+   "index": 236,
+   "id": "a-000236",
+   "rows": 500,
+   "prompt": null,
+   "answer": {
+    "trimmed": true,
+    "chars_before": 4073,
+    "chars_after": 3551,
+    "cut_at_char": 3552,
+    "boundary": "word",
+    "answer_tokens": 864,
+    "marker": null,
+    "note": "no marker in the answer \u2014 one there would be trained on"
+   }
+  },
+  {
+   "index": 237,
+   "id": "a-000237",
+   "rows": 500,
+   "prompt": {
+    "at": "tail",
+    "chars_before": 4667,
+    "kept_chars": 3532,
+    "dropped_chars": 1177,
+    "cut_at_char": 1177,
+    "boundary": "clause",
+    "marker": "[... 1177 earlier characters omitted ...]",
+    "marker_chars": 41,
+    "trimmed": true
+   },
+   "answer": null
+  },
+  {
+   "index": 239,
+   "id": "a-000239",
+   "rows": 500,
+   "prompt": null,
+   "answer": {
+    "trimmed": true,
+    "chars_before": 4543,
+    "chars_after": 531,
+    "cut_at_char": 532,
+    "boundary": "word",
+    "answer_tokens": 147,
+    "marker": null,
+    "note": "no marker in the answer \u2014 one there would be trained on"
+   }
+  },
+  {
+   "index": 240,
+   "id": "a-000240",
+   "rows": 500,
+   "prompt": {
+    "at": "tail",
+    "chars_before": 6801,
+    "kept_chars": 4772,
+    "dropped_chars": 2071,
+    "cut_at_char": 2071,
+    "boundary": "line",
+    "marker": "[... 2071 earlier characters omitted ...]",
+    "marker_chars": 41,
+    "trimmed": true
+   },
+   "answer": null
+  },
+  {
+   "index": 244,
+   "id": "a-000244",
+   "rows": 500,
+   "prompt": null,
+   "answer": {
+    "trimmed": true,
+    "chars_before": 1069,
+    "chars_after": 814,
+    "cut_at_char": 815,
+    "boundary": "word",
+    "answer_tokens": 213,
+    "marker": null,
+    "note": "no marker in the answer \u2014 one there would be trained on"
+   }
+  },
+  {
+   "index": 250,
+   "id": "a-000250",
+   "rows": 500,
+   "prompt": null,
+   "answer": {
+    "trimmed": true,
+    "chars_before": 2976,
+    "chars_after": 281,
+    "cut_at_char": 282,
+    "boundary": "word",
+    "answer_tokens": 67,
+    "marker": null,
+    "note": "no marker in the answer \u2014 one there would be trained on"
+   }
+  },
+  {
+   "index": 251,
+   "id": "a-000251",
+   "rows": 500,
+   "prompt": null,
+   "answer": {
+    "trimmed": true,
+    "chars_before": 4620,
+    "chars_after": 2249,
+    "cut_at_char": 2250,
+    "boundary": "word",
+    "answer_tokens": 540,
+    "marker": null,
+    "note": "no marker in the answer \u2014 one there would be trained on"
+   }
+  },
+  {
+   "index": 252,
+   "id": "a-000252",
+   "rows": 500,
+   "prompt": null,
+   "answer": {
+    "trimmed": true,
+    "chars_before": 1400,
+    "chars_after": 521,
+    "cut_at_char": 522,
+    "boundary": "word",
+    "answer_tokens": 122,
+    "marker": null,
+    "note": "no marker in the answer \u2014 one there would be trained on"
+   }
+  },
+  {
+   "index": 253,
+   "id": "a-000253",
+   "rows": 500,
+   "prompt": null,
+   "answer": {
+    "trimmed": true,
+    "chars_before": 1538,
+    "chars_after": 1004,
+    "cut_at_char": 1005,
+    "boundary": "word",
+    "answer_tokens": 295,
+    "marker": null,
+    "note": "no marker in the answer \u2014 one there would be trained on"
+   }
+  },
+  {
+   "index": 257,
+   "id": "a-000257",
+   "rows": 500,
+   "prompt": null,
+   "answer": {
+    "trimmed": true,
+    "chars_before": 3802,
+    "chars_after": 2478,
+    "cut_at_char": 2479,
+    "boundary": "word",
+    "answer_tokens": 667,
+    "marker": null,
+    "note": "no marker in the answer \u2014 one there would be trained on"
+   }
+  },
+  {
+   "index": 260,
+   "id": "a-000260",
+   "rows": 500,
+   "prompt": null,
+   "answer": {
+    "trimmed": true,
+    "chars_before": 4177,
+    "chars_after": 1263,
+    "cut_at_char": 1264,
+    "boundary": "word",
+    "answer_tokens": 316,
+    "marker": null,
+    "note": "no marker in the answer \u2014 one there would be trained on"
+   }
+  },
+  {
+   "index": 262,
+   "id": "a-000262",
+   "rows": 500,
+   "prompt": null,
+   "answer": {
+    "trimmed": true,
+    "chars_before": 2211,
+    "chars_after": 1787,
+    "cut_at_char": 1788,
+    "boundary": "clause",
+    "answer_tokens": 443,
+    "marker": null,
+    "note": "no marker in the answer \u2014 one there would be trained on"
+   }
+  },
+  {
+   "index": 264,
+   "id": "a-000264",
+   "rows": 500,
+   "prompt": {
+    "at": "tail",
+    "chars_before": 7892,
+    "kept_chars": 3215,
+    "dropped_chars": 4719,
+    "cut_at_char": 4719,
+    "boundary": "line",
+    "marker": "[... 4719 earlier characters omitted ...]",
+    "marker_chars": 41,
+    "trimmed": true
+   },
+   "answer": null
+  },
+  {
+   "index": 267,
+   "id": "a-000267",
+   "rows": 500,
+   "prompt": {
+    "at": "tail",
+    "chars_before": 8121,
+    "kept_chars": 5531,
+    "dropped_chars": 2632,
+    "cut_at_char": 2632,
+    "boundary": "word",
+    "marker": "[... 2632 earlier characters omitted ...]",
+    "marker_chars": 41,
+    "trimmed": true
+   },
+   "answer": null
+  },
+  {
+   "index": 272,
+   "id": "a-000272",
+   "rows": 500,
+   "prompt": null,
+   "answer": {
+    "trimmed": true,
+    "chars_before": 3988,
+    "chars_after": 549,
+    "cut_at_char": 550,
+    "boundary": "word",
+    "answer_tokens": 155,
+    "marker": null,
+    "note": "no marker in the answer \u2014 one there would be trained on"
+   }
+  },
+  {
+   "index": 275,
+   "id": "a-000275",
+   "rows": 500,
+   "prompt": {
+    "at": "tail",
+    "chars_before": 6995,
+    "kept_chars": 1896,
+    "dropped_chars": 5141,
+    "cut_at_char": 5141,
+    "boundary": "line",
+    "marker": "[... 5141 earlier characters omitted ...]",
+    "marker_chars": 41,
+    "trimmed": true
+   },
+   "answer": null
+  },
+  {
+   "index": 278,
+   "id": "a-000278",
+   "rows": 500,
+   "prompt": null,
+   "answer": {
+    "trimmed": true,
+    "chars_before": 4223,
+    "chars_after": 307,
+    "cut_at_char": 308,
+    "boundary": "word",
+    "answer_tokens": 81,
+    "marker": null,
+    "note": "no marker in the answer \u2014 one there would be trained on"
+   }
+  },
+  {
+   "index": 281,
+   "id": "a-000281",
+   "rows": 500,
+   "prompt": {
+    "at": "tail",
+    "chars_before": 6926,
+    "kept_chars": 1981,
+    "dropped_chars": 4987,
+    "cut_at_char": 4987,
+    "boundary": "word",
+    "marker": "[... 4987 earlier characters omitted ...]",
+    "marker_chars": 41,
+    "trimmed": true
+   },
+   "answer": null
+  },
+  {
+   "index": 283,
+   "id": "a-000283",
+   "rows": 500,
+   "prompt": {
+    "at": "tail",
+    "chars_before": 4994,
+    "kept_chars": 3205,
+    "dropped_chars": 1831,
+    "cut_at_char": 1831,
+    "boundary": "word",
+    "marker": "[... 1831 earlier characters omitted ...]",
+    "marker_chars": 41,
+    "trimmed": true
+   },
+   "answer": null
+  },
+  {
+   "index": 284,
+   "id": "a-000284",
+   "rows": 500,
+   "prompt": {
+    "at": "tail",
+    "chars_before": 7234,
+    "kept_chars": 1826,
+    "dropped_chars": 5450,
+    "cut_at_char": 5450,
+    "boundary": "word",
+    "marker": "[... 5450 earlier characters omitted ...]",
+    "marker_chars": 41,
+    "trimmed": true
+   },
+   "answer": null
+  },
+  {
+   "index": 286,
+   "id": "a-000286",
+   "rows": 500,
+   "prompt": {
+    "at": "tail",
+    "chars_before": 8042,
+    "kept_chars": 4242,
+    "dropped_chars": 3842,
+    "cut_at_char": 3842,
+    "boundary": "word",
+    "marker": "[... 3842 earlier characters omitted ...]",
+    "marker_chars": 41,
+    "trimmed": true
+   },
+   "answer": null
+  },
+  {
+   "index": 287,
+   "id": "a-000287",
+   "rows": 500,
+   "prompt": null,
+   "answer": {
+    "trimmed": true,
+    "chars_before": 3566,
+    "chars_after": 1255,
+    "cut_at_char": 1256,
+    "boundary": "word",
+    "answer_tokens": 353,
+    "marker": null,
+    "note": "no marker in the answer \u2014 one there would be trained on"
+   }
+  },
+  {
+   "index": 293,
+   "id": "a-000293",
+   "rows": 500,
+   "prompt": null,
+   "answer": {
+    "trimmed": true,
+    "chars_before": 3978,
+    "chars_after": 173,
+    "cut_at_char": 174,
+    "boundary": "clause",
+    "answer_tokens": 53,
+    "marker": null,
+    "note": "no marker in the answer \u2014 one there would be trained on"
+   }
+  },
+  {
+   "index": 295,
+   "id": "a-000295",
+   "rows": 500,
+   "prompt": {
+    "at": "tail",
+    "chars_before": 8670,
+    "kept_chars": 5970,
+    "dropped_chars": 2742,
+    "cut_at_char": 2742,
+    "boundary": "word",
+    "marker": "[... 2742 earlier characters omitted ...]",
+    "marker_chars": 41,
+    "trimmed": true
+   },
+   "answer": null
+  },
+  {
+   "index": 299,
+   "id": "a-000299",
+   "rows": 500,
+   "prompt": null,
+   "answer": {
+    "trimmed": true,
+    "chars_before": 3962,
+    "chars_after": 964,
+    "cut_at_char": 965,
+    "boundary": "sentence",
+    "answer_tokens": 261,
+    "marker": null,
+    "note": "no marker in the answer \u2014 one there would be trained on"
+   }
+  },
+  {
+   "index": 300,
+   "id": "a-000300",
+   "rows": 500,
+   "prompt": {
+    "at": "tail",
+    "chars_before": 5839,
+    "kept_chars": 3940,
+    "dropped_chars": 1941,
+    "cut_at_char": 1941,
+    "boundary": "word",
+    "marker": "[... 1941 earlier characters omitted ...]",
+    "marker_chars": 41,
+    "trimmed": true
+   },
+   "answer": null
+  },
+  {
+   "index": 302,
+   "id": "a-000302",
+   "rows": 500,
+   "prompt": null,
+   "answer": {
+    "trimmed": true,
+    "chars_before": 4228,
+    "chars_after": 4217,
+    "cut_at_char": 4218,
+    "boundary": "word",
+    "answer_tokens": 1003,
+    "marker": null,
+    "note": "no marker in the answer \u2014 one there would be trained on"
+   }
+  },
+  {
+   "index": 308,
+   "id": "a-000308",
+   "rows": 500,
+   "prompt": null,
+   "answer": {
+    "trimmed": true,
+    "chars_before": 3772,
+    "chars_after": 3401,
+    "cut_at_char": 3402,
+    "boundary": "word",
+    "answer_tokens": 867,
+    "marker": null,
+    "note": "no marker in the answer \u2014 one there would be trained on"
+   }
+  },
+  {
+   "index": 311,
+   "id": "a-000311",
+   "rows": 500,
+   "prompt": {
+    "at": "tail",
+    "chars_before": 6247,
+    "kept_chars": 1704,
+    "dropped_chars": 4585,
+    "cut_at_char": 4585,
+    "boundary": "word",
+    "marker": "[... 4585 earlier characters omitted ...]",
+    "marker_chars": 41,
+    "trimmed": true
+   },
+   "answer": null
+  },
+  {
+   "index": 316,
+   "id": "a-000316",
+   "rows": 500,
+   "prompt": {
+    "at": "tail",
+    "chars_before": 5339,
+    "kept_chars": 4123,
+    "dropped_chars": 1258,
+    "cut_at_char": 1258,
+    "boundary": "word",
+    "marker": "[... 1258 earlier characters omitted ...]",
+    "marker_chars": 41,
+    "trimmed": true
+   },
+   "answer": null
+  },
+  {
+   "index": 317,
+   "id": "a-000317",
+   "rows": 500,
+   "prompt": {
+    "at": "tail",
+    "chars_before": 5331,
+    "kept_chars": 1531,
+    "dropped_chars": 3842,
+    "cut_at_char": 3842,
+    "boundary": "clause",
+    "marker": "[... 3842 earlier characters omitted ...]",
+    "marker_chars": 41,
+    "trimmed": true
+   },
+   "answer": null
+  },
+  {
+   "index": 318,
+   "id": "a-000318",
+   "rows": 500,
+   "prompt": {
+    "at": "tail",
+    "chars_before": 6647,
+    "kept_chars": 4215,
+    "dropped_chars": 2474,
+    "cut_at_char": 2474,
+    "boundary": "clause",
+    "marker": "[... 2474 earlier characters omitted ...]",
+    "marker_chars": 41,
+    "trimmed": true
+   },
+   "answer": null
+  },
+  {
+   "index": 322,
+   "id": "a-000322",
+   "rows": 500,
+   "prompt": null,
+   "answer": {
+    "trimmed": true,
+    "chars_before": 1204,
+    "chars_after": 749,
+    "cut_at_char": 750,
+    "boundary": "word",
+    "answer_tokens": 179,
+    "marker": null,
+    "note": "no marker in the answer \u2014 one there would be trained on"
+   }
+  },
+  {
+   "index": 326,
+   "id": "a-000326",
+   "rows": 500,
+   "prompt": null,
+   "answer": {
+    "trimmed": true,
+    "chars_before": 4031,
+    "chars_after": 1385,
+    "cut_at_char": 1386,
+    "boundary": "word",
+    "answer_tokens": 348,
+    "marker": null,
+    "note": "no marker in the answer \u2014 one there would be trained on"
+   }
+  },
+  {
+   "index": 328,
+   "id": "a-000328",
+   "rows": 500,
+   "prompt": {
+    "at": "tail",
+    "chars_before": 5824,
+    "kept_chars": 4059,
+    "dropped_chars": 1806,
+    "cut_at_char": 1806,
+    "boundary": "line",
+    "marker": "[... 1806 earlier characters omitted ...]",
+    "marker_chars": 41,
+    "trimmed": true
+   },
+   "answer": null
+  },
+  {
+   "index": 333,
+   "id": "a-000333",
+   "rows": 500,
+   "prompt": null,
+   "answer": {
+    "trimmed": true,
+    "chars_before": 1273,
+    "chars_after": 1056,
+    "cut_at_char": 1057,
+    "boundary": "word",
+    "answer_tokens": 240,
+    "marker": null,
+    "note": "no marker in the answer \u2014 one there would be trained on"
+   }
+  },
+  {
+   "index": 335,
+   "id": "a-000335",
+   "rows": 500,
+   "prompt": {
+    "at": "tail",
+    "chars_before": 6214,
+    "kept_chars": 2216,
+    "dropped_chars": 4040,
+    "cut_at_char": 4040,
+    "boundary": "line",
+    "marker": "[... 4040 earlier characters omitted ...]",
+    "marker_chars": 41,
+    "trimmed": true
+   },
+   "answer": null
+  },
+  {
+   "index": 336,
+   "id": "a-000336",
+   "rows": 500,
+   "prompt": {
+    "at": "tail",
+    "chars_before": 5908,
+    "kept_chars": 4617,
+    "dropped_chars": 1333,
+    "cut_at_char": 1333,
+    "boundary": "word",
+    "marker": "[... 1333 earlier characters omitted ...]",
+    "marker_chars": 41,
+    "trimmed": true
+   },
+   "answer": null
+  },
+  {
+   "index": 338,
+   "id": "a-000338",
+   "rows": 500,
+   "prompt": null,
+   "answer": {
+    "trimmed": true,
+    "chars_before": 4320,
+    "chars_after": 1816,
+    "cut_at_char": 1817,
+    "boundary": "word",
+    "answer_tokens": 451,
+    "marker": null,
+    "note": "no marker in the answer \u2014 one there would be trained on"
+   }
+  },
+  {
+   "index": 339,
+   "id": "a-000339",
+   "rows": 500,
+   "prompt": null,
+   "answer": {
+    "trimmed": true,
+    "chars_before": 1372,
+    "chars_after": 1122,
+    "cut_at_char": 1123,
+    "boundary": "word",
+    "answer_tokens": 265,
+    "marker": null,
+    "note": "no marker in the answer \u2014 one there would be trained on"
+   }
+  },
+  {
+   "index": 340,
+   "id": "a-000340",
+   "rows": 500,
+   "prompt": {
+    "at": "tail",
+    "chars_before": 9143,
+    "kept_chars": 4048,
+    "dropped_chars": 5137,
+    "cut_at_char": 5137,
+    "boundary": "clause",
+    "marker": "[... 5137 earlier characters omitted ...]",
+    "marker_chars": 41,
+    "trimmed": true
+   },
+   "answer": null
+  },
+  {
+   "index": 346,
+   "id": "a-000346",
+   "rows": 500,
+   "prompt": {
+    "at": "tail",
+    "chars_before": 5176,
+    "kept_chars": 3115,
+    "dropped_chars": 2103,
+    "cut_at_char": 2103,
+    "boundary": "word",
+    "marker": "[... 2103 earlier characters omitted ...]",
+    "marker_chars": 41,
+    "trimmed": true
+   },
+   "answer": null
+  },
+  {
+   "index": 350,
+   "id": "a-000350",
+   "rows": 500,
+   "prompt": null,
+   "answer": {
+    "trimmed": true,
+    "chars_before": 4086,
+    "chars_after": 584,
+    "cut_at_char": 585,
+    "boundary": "word",
+    "answer_tokens": 131,
+    "marker": null,
+    "note": "no marker in the answer \u2014 one there would be trained on"
+   }
+  },
+  {
+   "index": 353,
+   "id": "a-000353",
+   "rows": 500,
+   "prompt": null,
+   "answer": {
+    "trimmed": true,
+    "chars_before": 4057,
+    "chars_after": 3107,
+    "cut_at_char": 3108,
+    "boundary": "word",
+    "answer_tokens": 835,
+    "marker": null,
+    "note": "no marker in the answer \u2014 one there would be trained on"
+   }
+  },
+  {
+   "index": 356,
+   "id": "a-000356",
+   "rows": 500,
+   "prompt": {
+    "at": "tail",
+    "chars_before": 7978,
+    "kept_chars": 1499,
+    "dropped_chars": 6521,
+    "cut_at_char": 6521,
+    "boundary": "line",
+    "marker": "[... 6521 earlier characters omitted ...]",
+    "marker_chars": 41,
+    "trimmed": true
+   },
+   "answer": null
+  },
+  {
+   "index": 360,
+   "id": "a-000360",
+   "rows": 500,
+   "prompt": {
+    "at": "tail",
+    "chars_before": 7455,
+    "kept_chars": 5124,
+    "dropped_chars": 2373,
+    "cut_at_char": 2373,
+    "boundary": "word",
+    "marker": "[... 2373 earlier characters omitted ...]",
+    "marker_chars": 41,
+    "trimmed": true
+   },
+   "answer": null
+  },
+  {
+   "index": 362,
+   "id": "a-000362",
+   "rows": 500,
+   "prompt": null,
+   "answer": {
+    "trimmed": true,
+    "chars_before": 3801,
+    "chars_after": 3601,
+    "cut_at_char": 3602,
+    "boundary": "clause",
+    "answer_tokens": 887,
+    "marker": null,
+    "note": "no marker in the answer \u2014 one there would be trained on"
+   }
+  },
+  {
+   "index": 365,
+   "id": "a-000365",
+   "rows": 500,
+   "prompt": null,
+   "answer": {
+    "trimmed": true,
+    "chars_before": 4566,
+    "chars_after": 2831,
+    "cut_at_char": 2832,
+    "boundary": "word",
+    "answer_tokens": 671,
+    "marker": null,
+    "note": "no marker in the answer \u2014 one there would be trained on"
+   }
+  },
+  {
+   "index": 367,
+   "id": "a-000367",
+   "rows": 500,
+   "prompt": {
+    "at": "tail",
+    "chars_before": 6787,
+    "kept_chars": 4141,
+    "dropped_chars": 2688,
+    "cut_at_char": 2688,
+    "boundary": "word",
+    "marker": "[... 2688 earlier characters omitted ...]",
+    "marker_chars": 41,
+    "trimmed": true
+   },
+   "answer": null
+  },
+  {
+   "index": 368,
+   "id": "a-000368",
+   "rows": 500,
+   "prompt": null,
+   "answer": {
+    "trimmed": true,
+    "chars_before": 4498,
+    "chars_after": 1164,
+    "cut_at_char": 1165,
+    "boundary": "word",
+    "answer_tokens": 308,
+    "marker": null,
+    "note": "no marker in the answer \u2014 one there would be trained on"
+   }
+  },
+  {
+   "index": 370,
+   "id": "a-000370",
+   "rows": 500,
+   "prompt": {
+    "at": "tail",
+    "chars_before": 9017,
+    "kept_chars": 4169,
+    "dropped_chars": 4890,
+    "cut_at_char": 4890,
+    "boundary": "word",
+    "marker": "[... 4890 earlier characters omitted ...]",
+    "marker_chars": 41,
+    "trimmed": true
+   },
+   "answer": null
+  },
+  {
+   "index": 371,
+   "id": "a-000371",
+   "rows": 500,
+   "prompt": {
+    "at": "tail",
+    "chars_before": 5894,
+    "kept_chars": 1902,
+    "dropped_chars": 4033,
+    "cut_at_char": 4033,
+    "boundary": "line",
+    "marker": "[... 4033 earlier characters omitted ...]",
+    "marker_chars": 41,
+    "trimmed": true
+   },
+   "answer": null
+  },
+  {
+   "index": 377,
+   "id": "a-000377",
+   "rows": 500,
+   "prompt": null,
+   "answer": {
+    "trimmed": true,
+    "chars_before": 3946,
+    "chars_after": 1896,
+    "cut_at_char": 1897,
+    "boundary": "clause",
+    "answer_tokens": 461,
+    "marker": null,
+    "note": "no marker in the answer \u2014 one there would be trained on"
+   }
+  },
+  {
+   "index": 384,
+   "id": "a-000384",
+   "rows": 500,
+   "prompt": {
+    "at": "tail",
+    "chars_before": 7205,
+    "kept_chars": 4348,
+    "dropped_chars": 2899,
+    "cut_at_char": 2899,
+    "boundary": "word",
+    "marker": "[... 2899 earlier characters omitted ...]",
+    "marker_chars": 41,
+    "trimmed": true
+   },
+   "answer": null
+  },
+  {
+   "index": 392,
+   "id": "a-000392",
+   "rows": 500,
+   "prompt": null,
+   "answer": {
+    "trimmed": true,
+    "chars_before": 3337,
+    "chars_after": 3220,
+    "cut_at_char": 3221,
+    "boundary": "word",
+    "answer_tokens": 958,
+    "marker": null,
+    "note": "no marker in the answer \u2014 one there would be trained on"
+   }
+  },
+  {
+   "index": 394,
+   "id": "a-000394",
+   "rows": 500,
+   "prompt": null,
+   "answer": {
+    "trimmed": true,
+    "chars_before": 1325,
+    "chars_after": 666,
+    "cut_at_char": 667,
+    "boundary": "word",
+    "answer_tokens": 187,
+    "marker": null,
+    "note": "no marker in the answer \u2014 one there would be trained on"
+   }
+  },
+  {
+   "index": 395,
+   "id": "a-000395",
+   "rows": 500,
+   "prompt": null,
+   "answer": {
+    "trimmed": true,
+    "chars_before": 3558,
+    "chars_after": 1500,
+    "cut_at_char": 1501,
+    "boundary": "word",
+    "answer_tokens": 392,
+    "marker": null,
+    "note": "no marker in the answer \u2014 one there would be trained on"
+   }
+  },
+  {
+   "index": 396,
+   "id": "a-000396",
+   "rows": 500,
+   "prompt": null,
+   "answer": {
+    "trimmed": true,
+    "chars_before": 1417,
+    "chars_after": 1253,
+    "cut_at_char": 1254,
+    "boundary": "word",
+    "answer_tokens": 283,
+    "marker": null,
+    "note": "no marker in the answer \u2014 one there would be trained on"
+   }
+  }
+ ],
  "estimated_full_row_tokens": {
-  "in": 374755,
-  "out": 347867
+  "in": 477363,
+  "out": 450475
  }
 }

@@ -239,6 +239,7 @@ def _corpus_panel(snap):
                 ('complete', cls.get('complete'), 'ok'),
                 ('partial', cls.get('partial'), 'warn'),
                 ('answer cut away', cls.get('answer_cut'), 'bad'),
+                ('prompt-trimmed rows', (ve.get('rewrites') or {}).get('prompt'), ''),
                 ('answers kept', (('%s%%' % ve.get('answer_tokens_kept_pct'))
                                   if ve.get('answer_tokens_kept_pct') is not None
                                   else None), ''),

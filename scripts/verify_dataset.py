@@ -104,6 +104,10 @@ def audit(rows, tok, max_len, fmt):
     """Token-level audit: what survives truncation, per row."""
     end_ids = tok.encode(END_MARK, add_special_tokens=False)
     counts = {"complete": 0, "partial": 0, "answer_cut": 0}
+    # Rows the fitter already rewrote. Kept out of `classes` (those are truncation
+    # classes and must keep summing to the row count) but reported separately,
+    # because a prompt-trimmed row is one that would otherwise have been dropped.
+    rewrites = {"prompt": 0, "answer": 0, "prompt_markers": 0, "examples": []}
     prompt_tok = comp_tok = comp_tok_full = kept_total = 0
     lens, heads, kept_comp = [], [], []
     term = 0
@@ -125,6 +129,21 @@ def audit(rows, tok, max_len, fmt):
         else:
             cls = "partial"
         counts[cls] += 1
+        fit = ((rec.get("meta") or {}).get("fit") or {})
+        pfit = fit.get("prompt") or {}
+        afit = fit.get("answer") or {}
+        if pfit.get("trimmed"):
+            rewrites["prompt"] += 1
+            rewrites["prompt_markers"] += 1 if pfit.get("marker") else 0
+            if len(rewrites["examples"]) < 5:
+                rewrites["examples"].append(
+                    {"i": i, "id": rec.get("id"),
+                     "cut_at_char": pfit.get("cut_at_char"),
+                     "dropped_chars": pfit.get("dropped_chars"),
+                     "boundary": pfit.get("boundary"),
+                     "marker": pfit.get("marker")})
+        if afit.get("trimmed"):
+            rewrites["answer"] += 1
         prompt_tok += min(n_head, max_len)
         kept_total += survives
         comp_tok += comp_kept
@@ -151,6 +170,7 @@ def audit(rows, tok, max_len, fmt):
         "classes": counts,
         "class_pct": {k: round(100.0 * v / n, 1) for k, v in counts.items()},
         "answer_fully_lost": counts["answer_cut"],
+        "rewrites": rewrites,
         "terminator_survives": term,
         "terminator_pct": round(100.0 * term / n, 1),
         "tokens": {
@@ -231,6 +251,16 @@ def print_report(path, rows, comp, summ, det, dup, overlap, max_len, n_samples):
           % (c["complete"], pct(c["complete"], len(rows)), c["partial"],
              pct(c["partial"], len(rows)), c["answer_cut"],
              pct(c["answer_cut"], len(rows))))
+    rw = summ.get("rewrites") or {}
+    if rw.get("prompt") or rw.get("answer"):
+        print("  rewritten by the fitter: %d prompt-trimmed (%d carry a marker), "
+              "%d answer-trimmed"
+              % (rw.get("prompt", 0), rw.get("prompt_markers", 0),
+                 rw.get("answer", 0)))
+        for ex in (rw.get("examples") or [])[:3]:
+            print("    row %s: prompt cut at char %s (%s chars omitted, %s boundary)"
+                  % (ex.get("id") or ex.get("i"), ex.get("cut_at_char"),
+                     ex.get("dropped_chars"), ex.get("boundary")))
     print("  terminator <|im_end|> survives in %d rows (%s)"
           % (summ["terminator_survives"],
              "%.1f%%" % (100.0 * summ["terminator_survives"] / len(rows))))

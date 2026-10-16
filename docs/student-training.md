@@ -152,7 +152,13 @@ What changed (`scripts/train_student.py`):
   the fitter, the verifier and the trainer count the same string with the same
   tokenizer call (special tokens included), because a budget measured one way and
   enforced another is how three rows lost their answers while the fitter said they
-  fitted.
+  fitted. The fitter now *recovers* those rows instead of dropping them: it trims the
+  prompt, marks where the cut happened and records it per row
+  (`meta.fit.prompt`, see `docs/dataset-generation.md`), so a fitted corpus reports
+  `answer_cut=0` — and the trainer's own check is what proves it rather than promises
+  it. Two rows of `starcoderdata-code` resist even that (no prompt trim leaves room
+  for the minimum answer); they are dropped and counted
+  (`prompt_too_long_after_trim`), not smuggled in.
 
 **Loss values are not comparable across this change** (different token sets) and
 not comparable across corpora. Before: 2.41 at step 2 of 96 on 500 rows. After:

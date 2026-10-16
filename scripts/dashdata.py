@@ -611,6 +611,8 @@ def corpus_state(state_file=None):
                           'rows_in': (f.get('input') or {}).get('rows'),
                           'rows_out': (f.get('output') or {}).get('rows'),
                           'trimmed_rows': f.get('trimmed_rows'),
+                          'prompt_trimmed_rows': f.get('prompt_trimmed_rows'),
+                          'rewritten_rows': (len(f.get('rewritten_rows') or []) or None),
                           'dropped': f.get('dropped'),
                           'policy': f.get('policy')}
         except (OSError, ValueError):
@@ -657,6 +659,13 @@ def _corpus_findings(out):
         if fi and fi.get('trimmed_rows'):
             notes.append('%d answers trimmed to fit the budget'
                          % fi['trimmed_rows'])
+        if fi and fi.get('prompt_trimmed_rows'):
+            # Rows that would have been dropped: their prompt was cut instead, with
+            # a marker where the cut happened, so the row still teaches an answer.
+            notes.append('%d row(s) kept by trimming their prompt (%s) — each one '
+                         'records where it was cut'
+                         % (fi['prompt_trimmed_rows'],
+                            (fi.get('policy') or {}).get('prompt_trim', 'trim')))
     else:
         warns.append('this corpus has never been measured — run verify_dataset.py '
                      '(--max-len) before trusting a training run on it')

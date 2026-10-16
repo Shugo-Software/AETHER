@@ -13,16 +13,22 @@
   "max_len": 1536,
   "max_per_prompt": 4,
   "min_answer_tokens": 24,
+  "prompt_trim": "tail",
+  "trim_marker": "(auto: [... N earlier/later characters omitted ...])",
+  "min_kept_prompt_chars": 200,
   "holdout": "datasets\\phase6_pilot1.jsonl",
   "holdout_prompts": 60
  },
  "dropped": {
   "prompt_too_long": 0,
+  "prompt_too_long_after_trim": 0,
   "anchor_holdout": 0,
   "answer_too_short_after_trim": 0,
   "duplicate_cap": 0
  },
  "trimmed_rows": 0,
+ "prompt_trimmed_rows": 0,
+ "rewritten_rows": [],
  "estimated_full_row_tokens": {
   "in": 436,
   "out": 436

@@ -13,16 +13,39 @@
   "max_len": 1536,
   "max_per_prompt": 4,
   "min_answer_tokens": 24,
+  "prompt_trim": "tail",
+  "trim_marker": "(auto: [... N earlier/later characters omitted ...])",
+  "min_kept_prompt_chars": 200,
   "holdout": "datasets\\phase6_pilot1.jsonl",
   "holdout_prompts": 60
  },
  "dropped": {
   "prompt_too_long": 0,
+  "prompt_too_long_after_trim": 0,
   "anchor_holdout": 0,
   "answer_too_short_after_trim": 0,
   "duplicate_cap": 0
  },
  "trimmed_rows": 1,
+ "prompt_trimmed_rows": 0,
+ "rewritten_rows": [
+  {
+   "index": 631,
+   "id": "h-000631",
+   "rows": 654,
+   "prompt": null,
+   "answer": {
+    "trimmed": true,
+    "chars_before": 2140,
+    "chars_after": 1916,
+    "cut_at_char": 1917,
+    "boundary": "line",
+    "answer_tokens": 432,
+    "marker": null,
+    "note": "no marker in the answer \u2014 one there would be trained on"
+   }
+  }
+ ],
  "estimated_full_row_tokens": {
   "in": 564155,
   "out": 564097
