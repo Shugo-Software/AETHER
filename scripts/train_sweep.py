@@ -203,6 +203,12 @@ def parse_args(argv=None):
     ap.add_argument("--stop-on-fail", action="store_true",
                     help="stop after a phase that fails its gate (default: continue "
                          "and record it)")
+    ap.add_argument("--reuse", action="store_true",
+                    help="reuse what is already on disk: a phase whose checkpoint "
+                         "exists is not retrained (its recorded step count is carried "
+                         "into the metrics), and an existing f16 is reused rather than "
+                         "re-converted. A crash at hour five should not cost the first "
+                         "four")
     ap.add_argument("--resume", default=None,
                     help="adapter to continue from (phase 1 starts here)")
     ap.add_argument("--dry-run", action="store_true", help="print the plan, do nothing")
@@ -312,24 +318,40 @@ def main(argv=None):
         state_write(status="training", phase=i, corpus=corpus, epochs=ph["epochs"],
                     batch=a.batch, grad_accum=a.grad_accum, lr=a.lr,
                     max_len=a.max_len, prompt_loss=a.prompt_loss)
-        try:
-            summary = ts.train_corpus(
-                a, tok, model, corpus, out_dir, state_write, phase=i,
-                max_steps=(ph["max_steps"] or None), epochs=ph["epochs"],
-                metrics_path=metrics_path, metrics_fresh=(i == 1), offset=offset,
-                phase_dir=phase_dir, resume_dir=(resume_dir if i == 1 else None))
-        except Exception as e:  # noqa: BLE001 — a crash is data too, so record it
-            rec["status"] = "failed:train"
-            rec["steps"]["train"] = {"ok": False, "error": str(e)}
+        # Resume: a phase whose checkpoint is already on disk (and whose training the
+        # sweep's own record says finished) is not trained again. Without this an
+        # 8-hour sweep restarts from zero whenever anything crashes, which is exactly
+        # what happened on 2026-10-16 after phase 1's training had completed.
+        prev = next((it for it in (state.get("iterations") or [])
+                     if it.get("iteration") == i), None)
+        prev_train = ((prev or {}).get("steps") or {}).get("train") or {}
+        reuse = bool(a.reuse and os.path.isdir(phase_dir)
+                     and prev_train.get("ok"))
+        if reuse:
+            offset += int(prev_train.get("steps") or 0)
+            rec["steps"]["train"] = dict(prev_train, resumed=True)
+            print("[sweep] phase %d: reusing the checkpoint on disk (%s steps already "
+                  "trained) — not retraining" % (i, prev_train.get("steps")), flush=True)
             save(state, state_path, rec)
-            print("[sweep] phase %d training failed: %s" % (i, e),
-                  file=sys.stderr, flush=True)
-            return 1
-        offset += summary["steps"]
-        rec["steps"]["train"] = {"ok": True, "loss": summary["train_loss"],
-                                 "steps": summary["steps"], "rows": summary["rows"],
-                                 "checkpoint": os.path.relpath(phase_dir, ROOT)}
-        save(state, state_path, rec)
+        else:
+            try:
+                summary = ts.train_corpus(
+                    a, tok, model, corpus, out_dir, state_write, phase=i,
+                    max_steps=(ph["max_steps"] or None), epochs=ph["epochs"],
+                    metrics_path=metrics_path, metrics_fresh=(i == 1), offset=offset,
+                    phase_dir=phase_dir, resume_dir=(resume_dir if i == 1 else None))
+            except Exception as e:  # noqa: BLE001 — a crash is data too, so record it
+                rec["status"] = "failed:train"
+                rec["steps"]["train"] = {"ok": False, "error": str(e)}
+                save(state, state_path, rec)
+                print("[sweep] phase %d training failed: %s" % (i, e),
+                      file=sys.stderr, flush=True)
+                return 1
+            offset += summary["steps"]
+            rec["steps"]["train"] = {"ok": True, "loss": summary["train_loss"],
+                                     "steps": summary["steps"], "rows": summary["rows"],
+                                     "checkpoint": os.path.relpath(phase_dir, ROOT)}
+            save(state, state_path, rec)
 
         artefacts = {}
         if not a.skip_export:
@@ -369,10 +391,10 @@ def main(argv=None):
                      "--adapter", phase_dir, "--name", name,
                      "--gguf", STUDENT_A["quant"], "--imatrix", imatrix, "--gguf-only"],
                     "sweep-%s-p%02d-quant.log" % (a.tag, i))
-                small = os.path.join(out_dir, "%s-%s.gguf" % (name, a.quant_a))
+                small = os.path.join(out_dir, "%s-%s.gguf" % (name, STUDENT_A["quant"]))
                 have_small = os.path.isfile(small)
                 rec["steps"]["quant"] = {"ok": bool(ok_q and have_small),
-                                         "tail": tail_q, "quant": a.quant_a,
+                                         "tail": tail_q, "quant": STUDENT_A["quant"],
                                          "gguf": (os.path.relpath(small, ROOT)
                                                   if have_small else None)}
                 if have_small:
