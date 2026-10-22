@@ -36,6 +36,7 @@ from __future__ import annotations
 import argparse
 import glob
 import json
+import math
 import os
 import sys
 from datetime import datetime, timezone
@@ -240,9 +241,22 @@ def main(argv=None):
         if not os.path.isfile(c):
             raise SystemExit("no such corpus: %s — fit it first "
                              "(hf_datasets.py --fit <repo>)" % c)
-    plan = [{"phase": i + 1, "corpus": os.path.basename(c), "slug": phase_slug(c),
-             "max_steps": a.phase_max_steps, "epochs": a.phase_epochs}
-            for i, c in enumerate(corpora)]
+    # --phase-max-steps 0 means one pass (--phase-epochs), and that has to become a
+    # concrete step count right here: train_corpus() falls back to args.max_steps when
+    # it is given None, and the sweep's parser has no such attribute, so "0 or None"
+    # used to raise 'Namespace object has no attribute max_steps' on every phase of
+    # every sweep that asked for epochs (never exercised until 2026-10-21).
+    per_step = max(1, a.batch * a.grad_accum)
+    plan = []
+    for i, c in enumerate(corpora):
+        rows = 0
+        with open(c, encoding="utf-8") as fh:
+            for line in fh:
+                rows += 1 if line.strip() else 0
+        steps = a.phase_max_steps or max(1, math.ceil(rows * a.phase_epochs / per_step))
+        plan.append({"phase": i + 1, "corpus": os.path.basename(c),
+                     "slug": phase_slug(c), "max_steps": steps,
+                     "epochs": a.phase_epochs, "rows": rows})
     if a.dry_run:
         print(json.dumps({"tag": a.tag, "phases": plan,
                           "export": not a.skip_export,
