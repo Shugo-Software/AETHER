@@ -34,6 +34,7 @@ import urllib.error
 import urllib.request
 from datetime import datetime, timezone
 
+
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import aether_env  # noqa: E402 - caches/temp stay on the repo drive (never C:)
 aether_env.pin_caches()
@@ -374,6 +375,11 @@ def main():
                       % (row.get("id"), rec.get("score"), len(fix)), flush=True)
         print("[review] wrote %d teacher correction(s) -> %s"
               % (written, args.correct_failures), flush=True)
+    if not scored:
+        print("[review] SCORED NOTHING — %d row(s) read, none with a verdict. The "
+              "teacher answered nothing (or every verdict failed to parse); this run "
+              "proves nothing, so it exits 3 rather than 0." % len(rows), flush=True)
+        return 3
     return 0
 
 

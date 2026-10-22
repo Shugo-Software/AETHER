@@ -154,6 +154,9 @@ def review(corpus, port, tag, args, sample=None):
     `args` supplies the default sample size (and the teacher endpoint, via
     review_students.py's own defaults); `sample` overrides it for a retention check.
     """
+    prior = os.path.join(LOGS, "review-%s.jsonl" % tag)
+    if os.path.isfile(prior):
+        os.replace(prior, prior + ".prev")   # a re-run must not inherit the last run's rows
     ok, tail = rt.run([rt.PY, "-u",
                        os.path.join(ROOT, "scripts", "review_students.py"),
                        "--student", tag, "--port", str(port),
@@ -162,8 +165,18 @@ def review(corpus, port, tag, args, sample=None):
                        "--tag", tag],
                       "sweep-%s-review.log" % tag)
     rate, scored = review_rate(tag)
-    return bool(ok), {"ok": bool(ok), "pass_rate": rate, "scored": scored,
-                      "tail": tail, "corpus": os.path.basename(corpus)}
+    # A review that scored nothing is not a pass, whatever its exit code says. All four
+    # phases of the 2026-10-16 sweep recorded ok=True with scored=0 because the teacher
+    # had died hours earlier, and the caller read that as success. Zero verdicts means
+    # the teacher was unreachable or every verdict failed to parse — both are findings.
+    graded = bool(ok) and scored > 0
+    if not graded:
+        print("[sweep] %s scored %d rows (exit ok=%s) — recording a failure, not a pass"
+              % (tag, scored, ok), flush=True)
+    return graded, {"ok": graded, "pass_rate": rate, "scored": scored,
+                    "tail": tail, "corpus": os.path.basename(corpus),
+                    "error": None if graded else
+                             "no rows scored — teacher unreachable or verdicts unparseable"}
 
 
 def parse_args(argv=None):
@@ -292,6 +305,16 @@ def main(argv=None):
             "  using the 6 GB 1060. Set it the way the control plane does:\n"
             "    $env:CUDA_VISIBLE_DEVICES='1'    # the 6 GB 1060, then run the sweep\n"
             "  or launch through the dashboard / scripts\\run-train.cmd.")
+    if not a.skip_grade:
+        import socket
+        try:
+            socket.create_connection(("127.0.0.1", 8080), timeout=3).close()
+        except OSError:
+            raise SystemExit(
+                "the teacher is not answering on 127.0.0.1:8080, so no phase could be "
+                "graded.  Start it (scripts\\start-teacher-server.ps1) or pass "
+                "--skip-grade. A review with no teacher does not fail: it scores zero "
+                "rows and still exits 0.")
     state_write(status="loading_tokenizer", base_model=am.resolve(a.model),
                 visible_devices=os.environ.get("CUDA_VISIBLE_DEVICES"))
     print("[sweep] base model: %s" % am.describe(a.model), flush=True)
