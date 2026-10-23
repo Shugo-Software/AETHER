@@ -393,8 +393,12 @@ def main(argv=None):
         artefacts = {}
         if not a.skip_export:
             name = "%s-p%02d" % (a.tag, i)
-            out_dir = os.path.join(EXPORTS, name)
-            f16 = os.path.join(out_dir, "%s-f16.gguf" % name)
+            # NOT out_dir: that is the adapter root, and shadowing it there made every
+            # later phase train into the previous phase's export directory: phase 2's
+            # checkpoint landed in exports/jadis-pro-e1-p01 on 2026-10-21, so --reuse
+            # could not find it and silently retrained the phase instead.
+            export_dir = os.path.join(EXPORTS, name)
+            f16 = os.path.join(export_dir, "%s-f16.gguf" % name)
             # f16 first: it is the reference file, the source the imatrix is built from,
             # and the artefact student B is served as.
             ok, tail = rt.run([rt.PY, "-u",
@@ -428,7 +432,7 @@ def main(argv=None):
                      "--adapter", phase_dir, "--name", name,
                      "--gguf", STUDENT_A["quant"], "--imatrix", imatrix, "--gguf-only"],
                     "sweep-%s-p%02d-quant.log" % (a.tag, i))
-                small = os.path.join(out_dir, "%s-%s.gguf" % (name, STUDENT_A["quant"]))
+                small = os.path.join(export_dir, "%s-%s.gguf" % (name, STUDENT_A["quant"]))
                 have_small = os.path.isfile(small)
                 rec["steps"]["quant"] = {"ok": bool(ok_q and have_small),
                                          "tail": tail_q, "quant": STUDENT_A["quant"],
