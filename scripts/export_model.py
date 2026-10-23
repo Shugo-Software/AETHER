@@ -20,6 +20,8 @@ export_control.py in logs/export-active.json for the dashboard.
 from __future__ import annotations
 
 import argparse
+import gc
+import time
 import glob
 import json
 import os
@@ -479,7 +481,20 @@ def to_gguf(out_dir, quants, state, imatrix=None, src_dir=None, base_name=None):
             cmd.append("--trust-remote-code")
         cmd.append(src_dir or out_dir)
         print("[export] gguf f16:", " ".join(cmd), flush=True)
-        subprocess.run(cmd, check=True, env=_hf_env())
+        # Retry once: the converter is a fresh interpreter that imports torch, and its
+        # DLL init is load-dependent on this rig. Phase 1 of the jadis-pro-e1 sweep died
+        # here with WinError 1114 (torch lib shm.dll) while the exporter still held the
+        # merged weights; a retry costs seconds, a failed convert costs a whole phase.
+        for _attempt in (1, 2):
+            try:
+                subprocess.run(cmd, check=True, env=_hf_env())
+                break
+            except subprocess.CalledProcessError:
+                if _attempt == 2:
+                    raise
+                print("[export] f16 conversion attempt %d failed - retrying in 30s"
+                      % _attempt, flush=True)
+                time.sleep(30)
         good, why = _gguf_ok(tmp, 0)
         if not good:
             raise SystemExit("f16 conversion produced %s (%s)" % (tmp, why))
@@ -770,6 +785,10 @@ def main():
                       flush=True)
             else:
                 merge(adapter_dir, out_dir, state)
+            # Release the merged weights before the converter forks: transformers models
+            # sit in reference cycles, so returning from merge() does not free them, and
+            # the converter then dies at import torch for want of memory.
+            gc.collect()
             gguf_files = to_gguf(out_dir, quants, state, imatrix=args.imatrix)
             _copy_license(out_dir)
             license_file = "LICENSE"
