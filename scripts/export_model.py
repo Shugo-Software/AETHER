@@ -382,11 +382,13 @@ def merge(adapter_dir, out_dir, state):
 
     state.write("merging", stage="merge")
     base = AutoModelForCausalLM.from_pretrained(
-        # Stream the shards rather than materialising a full state dict alongside the
-        # model: phases 1 and 3 of the jadis-pro-e1 sweep died here with OSError 1455
-        # (paging file too small) while the trainer was still resident.
-        STUDENT, torch_dtype=torch.float16, trust_remote_code=True,
-        low_cpu_mem_usage=True)  # CPU
+        # NOT low_cpu_mem_usage=True: that routes the load through safetensors mmap
+        # (safe_open), which is where phases 1 and 3 of the jadis-pro-e1 sweep died
+        # with OSError 1455. The plain load succeeded five times in a row before that
+        # (the base export and all four phases of the first sweep), so it is the safer
+        # path on this rig. The mitigations that matter are gc.collect() before the
+        # converter forks, and the retry around the conversion.
+        STUDENT, torch_dtype=torch.float16, trust_remote_code=True)  # CPU
     model = PeftModel.from_pretrained(base, adapter_dir)
     merged = model.merge_and_unload()
     state.write("saving", stage="save")
