@@ -380,7 +380,11 @@ def merge(adapter_dir, out_dir, state):
 
     state.write("merging", stage="merge")
     base = AutoModelForCausalLM.from_pretrained(
-        STUDENT, torch_dtype=torch.float16, trust_remote_code=True)  # CPU
+        # Stream the shards rather than materialising a full state dict alongside the
+        # model: phases 1 and 3 of the jadis-pro-e1 sweep died here with OSError 1455
+        # (paging file too small) while the trainer was still resident.
+        STUDENT, torch_dtype=torch.float16, trust_remote_code=True,
+        low_cpu_mem_usage=True)  # CPU
     model = PeftModel.from_pretrained(base, adapter_dir)
     merged = model.merge_and_unload()
     state.write("saving", stage="save")
